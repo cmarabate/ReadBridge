@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/native/">
+    <Project Path="native/ReadBridge.Companion/ReadBridge.Companion.csproj" />
+  </Folder>
+</Solution>
