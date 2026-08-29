@@ -63,12 +63,17 @@ export class NativeCompanionClient {
       }
     });
 
+    // A spawn failure (e.g. the companion was never built) emits 'error', not 'exit'. Without a
+    // listener that is an unhandled EventEmitter error, which takes down the host process; and
+    // any in-flight request would otherwise never settle.
+    this.process.on('error', (err) => {
+      this.process = null;
+      this.rejectPending(new Error(`Companion process failed to start: ${err.message}`));
+    });
+
     this.process.on('exit', () => {
       this.process = null;
-      for (const { reject } of this.pendingRequests.values()) {
-        reject(new Error('Companion process exited unexpectedly.'));
-      }
-      this.pendingRequests.clear();
+      this.rejectPending(new Error('Companion process exited unexpectedly.'));
     });
   }
 
@@ -100,6 +105,13 @@ export class NativeCompanionClient {
 
   public async ping(): Promise<string> {
     return this.call('ping');
+  }
+
+  private rejectPending(err: Error): void {
+    for (const { reject } of this.pendingRequests.values()) {
+      reject(err);
+    }
+    this.pendingRequests.clear();
   }
 
   public stop(): void {

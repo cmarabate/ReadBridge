@@ -14,7 +14,8 @@ namespace ReadBridge.Companion.Overlay
         private HighlightOverlayWindow? _window;
         private Dispatcher? _dispatcher;
         private readonly ManualResetEventSlim _initEvent = new(false);
-        private bool _disposed;
+        private readonly object _disposeLock = new();
+        private volatile bool _disposed;
 
         public OverlayController()
         {
@@ -59,16 +60,34 @@ namespace ReadBridge.Companion.Overlay
             });
         }
 
+        /// <summary>
+        /// Idempotent and safe to call concurrently. The companion disposes the overlay from two
+        /// places that can race when the host dies: the parent watchdog thread and the main stdio
+        /// loop unwinding its <c>using</c>. Without the lock both could pass the guard together and
+        /// double-shutdown the dispatcher or the init event.
+        /// </summary>
         public void Dispose()
         {
-            if (!_disposed)
+            lock (_disposeLock)
             {
-                if (_dispatcher != null && !_dispatcher.HasShutdownStarted)
-                {
-                    _dispatcher.InvokeShutdown();
-                }
-                _initEvent.Dispose();
+                if (_disposed) return;
+
+                // Set first so ShowHighlights/Clear stop queueing work onto a dying dispatcher.
                 _disposed = true;
+
+                try
+                {
+                    if (_dispatcher != null && !_dispatcher.HasShutdownStarted)
+                    {
+                        _dispatcher.InvokeShutdown();
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Dispatcher already shutting down on its own thread.
+                }
+
+                _initEvent.Dispose();
             }
         }
     }

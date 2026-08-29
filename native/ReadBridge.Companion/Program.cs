@@ -38,7 +38,7 @@ namespace ReadBridge.Companion
 
                 default:
                     Console.WriteLine($"Unknown command: {command}");
-                    Console.WriteLine("Usage: ReadBridge.Companion [inspect|inspect-proc <name>|highlight-test|matrix-scan|ipc [--parent-pid <pid>]]");
+                    Console.WriteLine("Usage: ReadBridge.Companion [inspect|inspect-proc <name>|highlight-test|matrix-scan|ipc [--parent-pid|-p <pid>]]");
                     return 1;
             }
         }
@@ -305,6 +305,73 @@ namespace ReadBridge.Companion
             return 0;
         }
 
+        private const int ParentPollIntervalMs = 500;
+        private const int OverlayTeardownTimeoutMs = 2000;
+
+        /// <summary>
+        /// Completes only once the parent process is actually observed to be gone.
+        /// A direct exit-wait handle is preferred, but if one cannot be obtained (for example a
+        /// cross-session or higher-integrity host denies SYNCHRONIZE access) this degrades to
+        /// polling instead of treating "cannot observe" as "has exited" - otherwise a companion
+        /// whose parent is still very much alive would terminate itself moments after launch.
+        /// </summary>
+        private static async Task WaitForParentExitAsync(int parentPid)
+        {
+            try
+            {
+                using var parent = Process.GetProcessById(parentPid);
+                await parent.WaitForExitAsync();
+                return;
+            }
+            catch (ArgumentException)
+            {
+                // No process carries this id: the parent is already gone.
+                return;
+            }
+            catch
+            {
+                // The parent exists but cannot be waited on directly; fall through to polling.
+            }
+
+            while (true)
+            {
+                try
+                {
+                    using var probe = Process.GetProcessById(parentPid);
+                    if (probe.HasExited) return;
+                }
+                catch (ArgumentException)
+                {
+                    return;
+                }
+                catch
+                {
+                    // Transient query failure - keep watching rather than exiting on a guess.
+                }
+
+                await Task.Delay(ParentPollIntervalMs);
+            }
+        }
+
+        /// <summary>
+        /// Tears the overlay down and terminates the companion. Teardown is both time-bounded and
+        /// exception-proof: a wedged or already-disposed overlay must never be able to keep an
+        /// orphaned companion (and its topmost click-through window) alive after its host is gone.
+        /// </summary>
+        private static void ExitAfterParentLoss(OverlayController overlay)
+        {
+            try
+            {
+                Task.Run(() => overlay.Dispose()).Wait(OverlayTeardownTimeoutMs);
+            }
+            catch
+            {
+                // Deliberately swallowed - the Exit below is the guarantee that matters.
+            }
+
+            Environment.Exit(0);
+        }
+
         private static int RunIpcLoop(string[] args)
         {
             int parentPid = 0;
@@ -320,23 +387,10 @@ namespace ReadBridge.Companion
 
             if (parentPid > 0)
             {
-                Task.Run(async () =>
+                _ = Task.Run(async () =>
                 {
-                    try
-                    {
-                        var parent = Process.GetProcessById(parentPid);
-                        await parent.WaitForExitAsync();
-                    }
-                    catch
-                    {
-                        // Parent process not found or already exited
-                    }
-                    finally
-                    {
-                        overlay.Clear();
-                        overlay.Dispose();
-                        Environment.Exit(0);
-                    }
+                    await WaitForParentExitAsync(parentPid);
+                    ExitAfterParentLoss(overlay);
                 });
             }
 

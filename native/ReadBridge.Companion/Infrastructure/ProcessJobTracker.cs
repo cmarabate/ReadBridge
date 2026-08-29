@@ -7,8 +7,15 @@ namespace ReadBridge.Companion.Infrastructure
 {
     /// <summary>
     /// Utility for binding child and companion processes to a Win32 Job Object with
-    /// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>. Ensures that if the parent process
-    /// terminates or crashes, the Windows kernel automatically reclaims child processes and HWNDs.
+    /// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>, so that when the handle owner terminates or
+    /// crashes the Windows kernel automatically reclaims the job's processes and their HWNDs.
+    /// <para>
+    /// NOT CURRENTLY WIRED UP. Nothing in this repository constructs a <c>ProcessJobTracker</c>,
+    /// so this kernel-level guarantee is not in force today. Companion lifetime is presently
+    /// governed by the userspace <c>--parent-pid</c> watchdog in <c>Program.cs</c> plus stdin EOF.
+    /// Delivering the kernel guarantee would require the job handle to be owned by the launching
+    /// host process, which is out of scope for this slice.
+    /// </para>
     /// </summary>
     public sealed class ProcessJobTracker : IDisposable
     {
