@@ -6,8 +6,13 @@ import {
   TtsWordAlignment,
 } from '../provider-interface.js';
 
-export class OpenAiTtsProvider implements ITtsProvider {
-  public readonly providerId = 'openai';
+/**
+ * Architecture prototype and simulator for OpenAI Text-to-Speech (/v1/audio/speech).
+ * Emulates the audio streaming contract while verifying that standard OpenAI TTS
+ * lacks word-level timestamps (triggering Level C Reader Fallback).
+ */
+export class SimulatedOpenAiTtsProvider implements ITtsProvider {
+  public readonly providerId = 'openai-simulator';
   // OpenAI standard TTS does not provide native word timestamps
   public readonly supportsWordLevelTimestamps = false;
   public readonly supportsIncrementalStreaming = false;
@@ -95,3 +100,6 @@ class OpenAiStreamSession implements ITtsStreamSession {
     this.audioListeners = [];
   }
 }
+
+export const OpenAiTtsProvider = SimulatedOpenAiTtsProvider;
+export type OpenAiTtsProvider = SimulatedOpenAiTtsProvider;

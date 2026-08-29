@@ -22,10 +22,20 @@ export class NativeCompanionClient {
     }
   }
 
+  public get isRunning(): boolean {
+    return this.process !== null && !this.process.killed;
+  }
+
+  public get processId(): number | undefined {
+    return this.process?.pid;
+  }
+
   public async start(): Promise<void> {
     if (this.process) return;
 
-    this.process = spawn(this.companionExecutablePath!, ['ipc'], {
+    const args = ['ipc', '--parent-pid', String(process.pid)];
+
+    this.process = spawn(this.companionExecutablePath!, args, {
       stdio: ['pipe', 'pipe', 'inherit'],
       windowsHide: true,
     });

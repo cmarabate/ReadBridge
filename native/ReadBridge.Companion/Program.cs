@@ -34,11 +34,11 @@ namespace ReadBridge.Companion
                     return RunMatrixScan(args);
 
                 case "ipc":
-                    return RunIpcLoop();
+                    return RunIpcLoop(args);
 
                 default:
                     Console.WriteLine($"Unknown command: {command}");
-                    Console.WriteLine("Usage: ReadBridge.Companion [inspect|inspect-proc <name>|highlight-test|matrix-scan|ipc]");
+                    Console.WriteLine("Usage: ReadBridge.Companion [inspect|inspect-proc <name>|highlight-test|matrix-scan|ipc [--parent-pid <pid>]]");
                     return 1;
             }
         }
@@ -305,9 +305,41 @@ namespace ReadBridge.Companion
             return 0;
         }
 
-        private static int RunIpcLoop()
+        private static int RunIpcLoop(string[] args)
         {
+            int parentPid = 0;
+            for (int i = 1; i < args.Length; i++)
+            {
+                if ((args[i] == "--parent-pid" || args[i] == "-p") && i + 1 < args.Length)
+                {
+                    int.TryParse(args[i + 1], out parentPid);
+                }
+            }
+
             using var overlay = new OverlayController();
+
+            if (parentPid > 0)
+            {
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        var parent = Process.GetProcessById(parentPid);
+                        await parent.WaitForExitAsync();
+                    }
+                    catch
+                    {
+                        // Parent process not found or already exited
+                    }
+                    finally
+                    {
+                        overlay.Clear();
+                        overlay.Dispose();
+                        Environment.Exit(0);
+                    }
+                });
+            }
+
             string? line;
 
             while ((line = Console.ReadLine()) != null)

@@ -6,8 +6,13 @@ import {
   TtsWordAlignment,
 } from '../provider-interface.js';
 
-export class ElevenLabsTtsProvider implements ITtsProvider {
-  public readonly providerId = 'elevenlabs';
+/**
+ * Architecture prototype and simulator for ElevenLabs Text-to-Speech.
+ * Emulates the streaming character/word alignment contract of ElevenLabs WebSockets
+ * for architecture and controller testing. (Live network client is implemented in Slice 2).
+ */
+export class SimulatedElevenLabsTtsProvider implements ITtsProvider {
+  public readonly providerId = 'elevenlabs-simulator';
   public readonly supportsWordLevelTimestamps = true;
   public readonly supportsIncrementalStreaming = true;
 
@@ -122,3 +127,6 @@ class ElevenLabsStreamSession implements ITtsStreamSession {
     this.alignmentListeners = [];
   }
 }
+
+export const ElevenLabsTtsProvider = SimulatedElevenLabsTtsProvider;
+export type ElevenLabsTtsProvider = SimulatedElevenLabsTtsProvider;

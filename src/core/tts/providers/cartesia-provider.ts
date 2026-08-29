@@ -6,8 +6,13 @@ import {
   TtsWordAlignment,
 } from '../provider-interface.js';
 
-export class CartesiaTtsProvider implements ITtsProvider {
-  public readonly providerId = 'cartesia';
+/**
+ * Architecture prototype and simulator for Cartesia Sonic Text-to-Speech.
+ * Emulates the streaming word-level timestamp alignment contract of the Cartesia WebSocket API
+ * for architecture and controller testing. (Live network client is implemented in Slice 2).
+ */
+export class SimulatedCartesiaTtsProvider implements ITtsProvider {
+  public readonly providerId = 'cartesia-simulator';
   public readonly supportsWordLevelTimestamps = true;
   public readonly supportsIncrementalStreaming = true;
 
@@ -131,3 +136,6 @@ class CartesiaStreamSession implements ITtsStreamSession {
     this.alignmentListeners = [];
   }
 }
+
+export const CartesiaTtsProvider = SimulatedCartesiaTtsProvider;
+export type CartesiaTtsProvider = SimulatedCartesiaTtsProvider;

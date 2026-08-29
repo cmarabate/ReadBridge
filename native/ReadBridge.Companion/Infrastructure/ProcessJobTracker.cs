@@ -5,6 +5,11 @@ using System.Runtime.InteropServices;
 
 namespace ReadBridge.Companion.Infrastructure
 {
+    /// <summary>
+    /// Utility for binding child and companion processes to a Win32 Job Object with
+    /// <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>. Ensures that if the parent process
+    /// terminates or crashes, the Windows kernel automatically reclaims child processes and HWNDs.
+    /// </summary>
     public sealed class ProcessJobTracker : IDisposable
     {
         private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
