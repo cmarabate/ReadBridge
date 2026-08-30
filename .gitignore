@@ -3,6 +3,7 @@ node_modules/
 dist/
 build/
 out/
+coverage/
 .npm/
 .yarn-integrity
 *.log

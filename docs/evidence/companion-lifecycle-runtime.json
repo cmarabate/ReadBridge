@@ -1,0 +1,116 @@
+{
+  "harness": "scripts/run_lifecycle_runtime_checks.js",
+  "platform": "win32 x64",
+  "node": "v22.16.0",
+  "cases": [
+    {
+      "id": "C1-normal-start-and-request-response",
+      "outcome": "PASS",
+      "companionPid": 72344,
+      "pingResult": "pong",
+      "pingLatencyMs": 2394
+    },
+    {
+      "id": "C2-overlay-show",
+      "outcome": "PASS",
+      "rectsSent": 2,
+      "response": "ok",
+      "companionAliveAfter": true
+    },
+    {
+      "id": "C3-overlay-clear-then-still-serving",
+      "outcome": "PASS",
+      "clearResponse": "ok",
+      "subsequentPing": "pong"
+    },
+    {
+      "id": "C4-cancellation-mid-job",
+      "outcome": "PASS",
+      "cancelResponse": "ok",
+      "subsequentPing": "pong"
+    },
+    {
+      "id": "C5-graceful-shutdown-stdin-eof",
+      "outcome": "PASS",
+      "companionPid": 72344,
+      "exitObservedWithinMs": 50
+    },
+    {
+      "id": "C6-orphan-census-after-graceful",
+      "outcome": "PASS",
+      "companionPidsBefore": [],
+      "companionPidsAfter": []
+    },
+    {
+      "id": "C7-repeated-start-stop-x5",
+      "outcome": "PASS",
+      "cycles": [
+        {
+          "cycle": 1,
+          "pid": 79084,
+          "ping": "pong",
+          "exitObservedWithinMs": 50
+        },
+        {
+          "cycle": 2,
+          "pid": 39604,
+          "ping": "pong",
+          "exitObservedWithinMs": 50
+        },
+        {
+          "cycle": 3,
+          "pid": 6832,
+          "ping": "pong",
+          "exitObservedWithinMs": 50
+        },
+        {
+          "cycle": 4,
+          "pid": 80520,
+          "ping": "pong",
+          "exitObservedWithinMs": 50
+        },
+        {
+          "cycle": 5,
+          "pid": 45924,
+          "ping": "pong",
+          "exitObservedWithinMs": 50
+        }
+      ]
+    },
+    {
+      "id": "C8-orphan-census-after-cycles",
+      "outcome": "PASS",
+      "companionPidsBefore": [],
+      "companionPidsAfter": []
+    },
+    {
+      "id": "C9-host-force-kill-WITH-parent-pid",
+      "outcome": "PASS",
+      "hostPid": 79344,
+      "companionPid": 69180,
+      "ping": "pong",
+      "stdinHeldOpenByHarness": true,
+      "companionExitedWithinMs": 50,
+      "observationWindowMs": 10000,
+      "survived": false
+    },
+    {
+      "id": "C10-control-host-force-kill-WITHOUT-parent-pid",
+      "outcome": "PASS (orphan reproduced as expected)",
+      "hostPid": 79552,
+      "companionPid": 72932,
+      "ping": "pong",
+      "stdinHeldOpenByHarness": true,
+      "companionExitedWithinMs": null,
+      "observationWindowMs": 8000,
+      "survived": true
+    },
+    {
+      "id": "C11-orphan-census-final",
+      "outcome": "PASS",
+      "companionPidsBefore": [],
+      "companionPidsAfter": []
+    }
+  ],
+  "failureCount": 0
+}
