@@ -13,6 +13,14 @@ namespace ReadBridge.Companion.Uia
         private static readonly Lazy<CUIAutomation8> _automationInstance = new(() => new CUIAutomation8());
         public static CUIAutomation8 Automation => _automationInstance.Value;
 
+        /// <summary>Upper bound on words sampled per provider. Hitting it means the sample was
+        /// truncated - it is not evidence that the document was fully enumerated.</summary>
+        public const int WordSampleCap = 15;
+
+        /// <summary>Character budget for the document-text probe. <c>DocumentLength</c>
+        /// saturates here and is therefore not the document's real length.</summary>
+        public const int DocumentTextProbeChars = 500;
+
         public static WindowInspectionResult InspectForegroundWindow()
         {
             IntPtr hwnd = NativeMethods.GetForegroundWindow();
@@ -234,12 +242,12 @@ namespace ReadBridge.Companion.Uia
                     var docRange = tp.DocumentRange;
                     if (docRange != null)
                     {
-                        string docText = docRange.GetText(500);
+                        string docText = docRange.GetText(DocumentTextProbeChars);
                         info.DocumentLength = docText?.Length ?? 0;
                         info.DocumentTextSample = docText != null && docText.Length > 150 ? docText.Substring(0, 150) + "..." : docText;
 
                         // Test word enumeration and bounding rectangles
-                        var sampleWords = TextRangeNavigator.EnumerateWords(docRange, containerRect, maxWords: 15);
+                        var sampleWords = TextRangeNavigator.EnumerateWords(docRange, containerRect, maxWords: WordSampleCap);
                         info.SampleWordCount = sampleWords.Count;
 
                         int wordsWithBounds = 0;
@@ -250,15 +258,19 @@ namespace ReadBridge.Companion.Uia
                             if (bounds.Count > 1) multiRectWords++;
                         }
 
+                        // The denominator is the SAMPLE size, not the document. It says every
+                        // sampled word returned at least one rectangle - it does not measure how
+                        // accurate those rectangles are, and it says nothing about the rest of
+                        // the document.
                         if (wordsWithBounds == sampleWords.Count && wordsWithBounds > 0)
                         {
-                            info.WordBoundingRectPrecision = multiRectWords > 0 
-                                ? $"High (Subpixel Multi-Rect Support, {wordsWithBounds}/{sampleWords.Count} bounds verified)" 
-                                : $"High (Exact Glyph Bounds, {wordsWithBounds}/{sampleWords.Count} bounds verified)";
+                            info.WordBoundingRectPrecision = multiRectWords > 0
+                                ? $"High (multi-rect wrapping observed; {wordsWithBounds}/{sampleWords.Count} sampled words returned bounds)"
+                                : $"High ({wordsWithBounds}/{sampleWords.Count} sampled words returned bounds)";
                         }
                         else if (wordsWithBounds > 0)
                         {
-                            info.WordBoundingRectPrecision = $"Partial ({wordsWithBounds}/{sampleWords.Count} words with valid bounds)";
+                            info.WordBoundingRectPrecision = $"Partial ({wordsWithBounds}/{sampleWords.Count} sampled words returned bounds)";
                         }
                         else
                         {
@@ -289,18 +301,35 @@ namespace ReadBridge.Companion.Uia
             {
                 Application = inspection.ProcessName,
                 ProcessName = inspection.ProcessName,
-                Version = "Installed Windows Runtime",
+                // The scanner reads no version metadata from the target; saying so beats
+                // emitting a placeholder that reads like a detected value.
+                Version = "Not detected (scanner does not read target versions)",
                 UiaProviderDiscovered = p != null ? $"{p.ClassName} ({p.FrameworkId})" : "None Discovered",
                 TextPattern = p?.SupportsTextPattern ?? false,
                 TextPattern2 = p?.SupportsTextPattern2 ?? false,
                 SelectionCapture = p?.HasActiveSelection == true ? "Supported (Active Selection Captured)" : (p?.SupportsSelection == true ? "Supported" : "Not Supported"),
-                DocumentVisibleText = p != null && p.DocumentLength > 0 ? $"Supported ({p.DocumentLength} chars captured)" : "Not Supported / Empty",
-                CharacterNavigation = p != null ? "Supported (TextUnit.Character stepping verified)" : "Unavailable",
-                WordNavigation = p != null && p.SampleWordCount > 0 ? $"Supported ({p.SampleWordCount} words enumerated with whitespace trimming)" : "Unavailable",
+                // DocumentLength is the length of a GetText(DocumentTextProbeChars) probe, so it
+                // saturates at the probe size and is not the document's size.
+                DocumentVisibleText = p != null && p.DocumentLength > 0
+                    ? $"Supported ({p.DocumentLength} chars read from a {DocumentTextProbeChars}-char probe)"
+                    : "Not Supported / Empty",
+                // Character stepping is exercised only inside whitespace trimming, whose failure
+                // is swallowed and never checked - so this is a capability declaration, not a
+                // measurement, and must not use the word "verified".
+                CharacterNavigation = p != null ? "Assumed available (not measured)" : "Unavailable",
+                // SampleWordCount is bounded by WordSampleCap: reaching the cap means the sample
+                // was truncated, not that the document was fully enumerated.
+                WordNavigation = p != null && p.SampleWordCount > 0
+                    ? $"Supported ({p.SampleWordCount} words sampled with whitespace trimming; sample capped at {WordSampleCap}, not full-document coverage)"
+                    : "Unavailable",
                 BoundingRectangles = p?.WordBoundingRectPrecision ?? "Unavailable",
-                RectanglePrecision = p != null && p.WordBoundingRectPrecision.StartsWith("High") ? "Exact Screen Physical Rectangles" : "Coarse / None",
-                WindowMoveTracking = "Supported via WinEvent EVENT_OBJECT_LOCATIONCHANGE",
-                DpiBehavior = "PerMonitorV2 Screen Coordinate Space Verified",
+                // Presence of bounds, not accuracy of bounds: nothing here compares a rectangle
+                // against an actual glyph position.
+                RectanglePrecision = p != null && p.WordBoundingRectPrecision.StartsWith("High") ? "Screen rectangles returned (accuracy not measured)" : "Coarse / None",
+                // No WinEvent hook is attached during a scan, and no DPI value is read or
+                // compared. Both of these are properties of the build, not observations.
+                WindowMoveTracking = "Not measured (no WinEvent hook attached during scan)",
+                DpiBehavior = "PerMonitorV2 declared in application manifest (not measured)",
                 ObservedFailures = p == null ? "No UIA TextPattern provider exposed" : (p.SampleWordCount == 0 ? "Empty text range returned" : "None"),
                 RecommendedCapabilityLevel = p == null 
                     ? "LEVEL C (READER_FALLBACK)" 

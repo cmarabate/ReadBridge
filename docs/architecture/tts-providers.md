@@ -1,6 +1,13 @@
 # TTS Provider Architecture & Protocol Specifications
 
-## 1. Provider Comparison Matrix (2026 Official Documentation)
+> **Status.** The providers shipped in `src/core/tts/providers/` are in-memory simulators
+> (`SimulatedCartesiaTtsProvider`, `SimulatedElevenLabsTtsProvider`, `SimulatedOpenAiTtsProvider`).
+> No WebSocket is opened and no network call is made anywhere in this slice; the simulators derive
+> word timings by splitting text on whitespace. Everything below is a **specification for Slice 2**,
+> transcribed from vendor documentation without a citation or retrieval date and **not** observed
+> traffic. Re-verify against live vendor docs before implementing.
+
+## 1. Provider Comparison Matrix (from vendor documentation — uncited)
 
 | Feature / Dimension | Cartesia Sonic-3.5 | ElevenLabs (Flash v2.5 / Turbo v2.5) | OpenAI Audio Speech (`tts-1`) |
 | :--- | :--- | :--- | :--- |
@@ -10,7 +17,7 @@
 | **Context Multiplexing** | Unlimited streams via `context_id` | Up to 5 concurrent streams | None (1 HTTP request = 1 stream) |
 | **Cancellation** | Send `{"context_id": "...", "cancel": true}` | Send `close_context` message | Abort TCP connection |
 | **Client Token Security** | API Key / Ephemeral token proxy | `POST /v1/single-use-token` ephemeral tokens | API Key |
-| **ReadBridge Compatibility** | **Recommended Primary Provider (Level A & B)** | **Recommended Secondary / High-Emotion (Level A & B)** | **Fallback (Level C Only)** |
+| **ReadBridge Plan (Slice 2)** | **Planned primary provider (Level A & B)** | **Planned secondary / high-emotion (Level A & B)** | **Planned fallback (Level C only)** |
 
 ---
 

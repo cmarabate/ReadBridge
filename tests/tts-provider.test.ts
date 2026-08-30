@@ -27,7 +27,9 @@ describe('TTS Providers', () => {
     expect(chunks.length).toBeGreaterThan(0);
   });
 
-  test('ElevenLabs provider supports word timestamps derived from alignment', async () => {
+  // The simulator splits on whitespace; aggregating ElevenLabs character-level alignment arrays
+  // into word bounds is Slice 2. The test name must not imply that derivation exists yet.
+  test('ElevenLabs simulator declares word-timestamp support and emits word alignments', async () => {
     const provider = new ElevenLabsTtsProvider();
     expect(provider.supportsWordLevelTimestamps).toBe(true);
 

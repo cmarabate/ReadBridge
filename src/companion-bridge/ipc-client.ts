@@ -71,6 +71,17 @@ export class NativeCompanionClient {
       this.rejectPending(new Error(`Companion process failed to start: ${err.message}`));
     });
 
+    // The 'error' handler above covers spawn failure only - it does NOT cover stream errors on
+    // the stdio pipes. If the companion dies between our last liveness check and a write, the
+    // write raises EPIPE on stdin asynchronously; with no listener that is an unhandled
+    // EventEmitter error, which takes down the host - the exact failure the spawn handler exists
+    // to prevent, one layer down.
+    const onStreamError = (err: Error): void => {
+      this.rejectPending(new Error(`Companion IPC stream failed: ${err.message}`));
+    };
+    this.process.stdin?.on('error', onStreamError);
+    this.process.stdout?.on('error', onStreamError);
+
     this.process.on('exit', () => {
       this.process = null;
       this.rejectPending(new Error('Companion process exited unexpectedly.'));

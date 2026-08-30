@@ -91,11 +91,18 @@ export class BrowserDomAdapter implements TextSourceAdapter {
   }
 
   private createDocumentFromText(fullText: string, title: string): ReaderDocument {
+    // Search forward from the end of the previous sentence. A bare indexOf() returns the
+    // FIRST occurrence, so any document containing a repeated sentence would give every
+    // later copy the offset of the first one - corrupting currentSentenceIndex and the
+    // highlight geometry derived from it.
+    let searchCursor = 0;
     const sentences = fullText
       .split(/(?<=[.?!])\s+/)
       .filter(Boolean)
       .map((text, index) => {
-        const charStart = fullText.indexOf(text);
+        const found = fullText.indexOf(text, searchCursor);
+        const charStart = found >= 0 ? found : searchCursor;
+        searchCursor = charStart + text.length;
         return {
           index,
           text,

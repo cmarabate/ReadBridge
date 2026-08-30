@@ -41,11 +41,31 @@ if (!canRunCompanion) {
   );
 }
 
-describeCompanion('Companion Lifecycle & IPC Protocol', () => {
-  test('companion executable exists', () => {
-    expect(fs.existsSync(exePath)).toBe(true);
+describe('Companion IPC client (no companion binary required)', () => {
+  // A silent skip is indistinguishable from a pass. Set READBRIDGE_REQUIRE_COMPANION=1 on a run
+  // that is MEANT to exercise the companion, so a missing binary fails loudly instead of
+  // quietly reducing the suite to the platform-independent tests below.
+  test('companion suite is not silently skipped when it was required', () => {
+    if (process.env.READBRIDGE_REQUIRE_COMPANION === '1') {
+      expect({ platform: process.platform, exePath, exePresent: fs.existsSync(exePath) }).toEqual(
+        expect.objectContaining({ platform: 'win32', exePresent: true })
+      );
+    }
+    expect(typeof canRunCompanion).toBe('boolean');
   });
 
+  // Spawn failure emits 'error' and never 'exit', so the 'exit' handler cannot cover it. With no
+  // 'error' listener this is an unhandled EventEmitter error that takes down the host process,
+  // and the pending request never settles. Needs no binary, so it survives the skip above.
+  test('a request rejects (rather than hanging or crashing) when the companion cannot spawn', async () => {
+    const client = new NativeCompanionClient(path.join(__dirname, 'no-such-companion.exe'));
+
+    await expect(client.call('ping')).rejects.toThrow(/failed to start/i);
+    expect(client.isRunning).toBe(false);
+  });
+});
+
+describeCompanion('Companion Lifecycle & IPC Protocol', () => {
   test('companion launches, responds to ping over stdio JSON-RPC, and terminates cleanly', async () => {
     const client = new NativeCompanionClient(exePath);
     await client.start();
@@ -97,6 +117,13 @@ describeCompanion('Companion Lifecycle & IPC Protocol', () => {
         companion.stdin!.write(JSON.stringify({ id: 'ping-1', method: 'ping', params: {} }) + '\n');
       });
       expect(pong).toBe('pong');
+      expect(isAlive(companionPid)).toBe(true);
+
+      // The watchdog must not mistake "cannot observe the parent" for "the parent exited". Hold
+      // for several poll intervals (500ms each) with the host deliberately still alive: a
+      // watchdog that self-terminates on a guess dies here rather than in production.
+      await sleep(2500);
+      expect(isAlive(hostPid)).toBe(true);
       expect(isAlive(companionPid)).toBe(true);
 
       process.kill(hostPid);

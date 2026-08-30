@@ -14,6 +14,7 @@
     "verify:build": "yarn build && dotnet build ReadBridge.slnx",
     "verify:ts": "yarn typecheck",
     "verify:lint": "yarn lint",
+    "evidence:lifecycle": "node scripts/run_lifecycle_runtime_checks.js --out docs/evidence/companion-lifecycle-runtime.json",
     "inspect:live": "dotnet run --project native/ReadBridge.Companion -- inspect",
     "matrix:scan": "dotnet run --project native/ReadBridge.Companion -- matrix-scan",
     "highlight:test": "dotnet run --project native/ReadBridge.Companion -- highlight-test"

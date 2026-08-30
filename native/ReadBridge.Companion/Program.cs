@@ -317,9 +317,12 @@ namespace ReadBridge.Companion
         /// </summary>
         private static async Task WaitForParentExitAsync(int parentPid)
         {
+            DateTime? parentStartedAt = null;
+
             try
             {
                 using var parent = Process.GetProcessById(parentPid);
+                try { parentStartedAt = parent.StartTime; } catch { /* identity check unavailable */ }
                 await parent.WaitForExitAsync();
                 return;
             }
@@ -339,6 +342,22 @@ namespace ReadBridge.Companion
                 {
                     using var probe = Process.GetProcessById(parentPid);
                     if (probe.HasExited) return;
+
+                    // Windows recycles process ids. Without an identity check, a parent that
+                    // exited and had its id reassigned would leave us watching an unrelated
+                    // process forever - precisely the orphaned companion this watchdog exists
+                    // to prevent. A later start time cannot be our parent.
+                    if (parentStartedAt.HasValue)
+                    {
+                        try
+                        {
+                            if (probe.StartTime > parentStartedAt.Value) return;
+                        }
+                        catch
+                        {
+                            // Cannot confirm identity; keep watching rather than exiting on a guess.
+                        }
+                    }
                 }
                 catch (ArgumentException)
                 {
@@ -375,10 +394,12 @@ namespace ReadBridge.Companion
         private static int RunIpcLoop(string[] args)
         {
             int parentPid = 0;
+            bool parentPidRequested = false;
             for (int i = 1; i < args.Length; i++)
             {
                 if ((args[i] == "--parent-pid" || args[i] == "-p") && i + 1 < args.Length)
                 {
+                    parentPidRequested = true;
                     int.TryParse(args[i + 1], out parentPid);
                 }
             }
@@ -389,9 +410,30 @@ namespace ReadBridge.Companion
             {
                 _ = Task.Run(async () =>
                 {
-                    await WaitForParentExitAsync(parentPid);
+                    try
+                    {
+                        await WaitForParentExitAsync(parentPid);
+                    }
+                    catch (Exception ex)
+                    {
+                        // An unobserved task exception here would silently remove the only
+                        // orphan guarantee in force, with nothing in the log to say so. Report
+                        // it rather than self-terminating: "cannot observe the parent" must not
+                        // be treated as "the parent exited".
+                        Console.Error.WriteLine($"[ReadBridge] Parent watchdog stopped watching pid {parentPid}: {ex.Message}");
+                        return;
+                    }
+
                     ExitAfterParentLoss(overlay);
                 });
+            }
+            else if (parentPidRequested)
+            {
+                // Silently running without a watchdog is worse than not asking for one: the
+                // caller believes the companion cannot outlive it, and it can.
+                Console.Error.WriteLine(
+                    "[ReadBridge] --parent-pid was supplied but is not a usable process id; " +
+                    "the parent watchdog is DISABLED and companion lifetime depends on stdin EOF alone.");
             }
 
             string? line;

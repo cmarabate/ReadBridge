@@ -32,12 +32,47 @@ namespace ReadBridge.Companion.Overlay
 
         private void RunOverlayMessagePump()
         {
-            _dispatcher = Dispatcher.CurrentDispatcher;
-            _window = new HighlightOverlayWindow();
-            _window.Show();
+            try
+            {
+                _dispatcher = Dispatcher.CurrentDispatcher;
+                _window = new HighlightOverlayWindow();
+                _window.Show();
+            }
+            catch (Exception ex)
+            {
+                // Creating a layered, click-through, full-virtual-screen window can legitimately
+                // fail (no interactive window station, composition unavailable, session 0). An
+                // unhandled exception on this background thread would terminate the entire
+                // companion; degrade to a no-overlay companion instead, which still serves IPC -
+                // ShowHighlights/Clear already no-op while _window is null.
+                _window = null;
+                Console.Error.WriteLine($"[ReadBridge] Overlay unavailable; continuing without it: {ex.Message}");
+                return;
+            }
+            finally
+            {
+                // Always release the constructor, on both the success and failure paths, so a
+                // failed overlay cannot stall startup for the full timeout.
+                _initEvent.Set();
+            }
 
-            _initEvent.Set();
-            Dispatcher.Run();
+            lock (_disposeLock)
+            {
+                // Dispose can land between the _dispatcher assignment above and this point - for
+                // instance when the host dies during a slow WPF cold start. Running a dispatcher
+                // that has already been told to shut down throws.
+                if (_disposed) return;
+            }
+
+            try
+            {
+                Dispatcher.Run();
+            }
+            catch (Exception ex)
+            {
+                // Same rule as above: this thread must never take the process down with it.
+                Console.Error.WriteLine($"[ReadBridge] Overlay message pump ended: {ex.Message}");
+            }
         }
 
         public void ShowHighlights(List<ScreenRectModel>? sentenceBounds, List<ScreenRectModel>? wordBounds)
@@ -87,7 +122,11 @@ namespace ReadBridge.Companion.Overlay
                     // Dispatcher already shutting down on its own thread.
                 }
 
-                _initEvent.Dispose();
+                // _initEvent is deliberately NOT disposed. If overlay startup overran the
+                // constructor's timeout, the overlay thread is still on its way to Set() it;
+                // disposing here would raise ObjectDisposedException on that thread and kill the
+                // process. A ManualResetEventSlim whose WaitHandle was never taken holds no OS
+                // handle, so leaving it is free.
             }
         }
     }

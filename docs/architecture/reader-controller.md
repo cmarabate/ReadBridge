@@ -2,7 +2,7 @@
 
 ## 1. Single Authority Principle
 
-All playback state, text acquisition, synchronization, audio routing, and visual highlighting are owned by a single authority: `ReaderController`.
+All playback state, text acquisition, synchronization, and visual highlighting are owned by a single authority: `ReaderController`. (Audio output routing is Slice 2 scope: the simulated providers emit placeholder buffers and nothing plays them.)
 
 ```
                     ┌─────────────────────────┐
@@ -32,7 +32,7 @@ All playback state, text acquisition, synchronization, audio routing, and visual
                            │
                            ▼
                     ┌─────────────┐
-                    │  stopping   │ ◄── Cleanup overlay, abort TTS session, release hooks
+                    │  stopping   │ ◄── Abort the TTS session, clear the active highlight
                     └──────┬──────┘
                            │
                            ▼
@@ -41,11 +41,18 @@ All playback state, text acquisition, synchronization, audio routing, and visual
                     └─────────────┘
 ```
 
-## 2. Session Token (`playbackSessionId`) Integrity
+**Not shown**: the `error` state, which is reachable from every state and is covered by
+`tests/state-machine.test.ts`. The `seeking` state exists in the transition table, but
+`ReaderController` exposes no `seek()` method yet, so `seeking` is currently unreachable from the
+controller — the `seek()` edge above is planned, not implemented. Overlay teardown and WinEvent
+hook release live in the native companion, not in `ReaderController`, which holds no overlay
+handle, companion client, or hook.
+
+## 2. Session Token (`sessionId`) Integrity
 
 To eliminate race conditions in asynchronous workflows:
-* Every reading invocation creates a unique `playbackSessionId` (e.g. `read-1771968800000-a7b9c`).
-* All downstream callbacks (TTS audio chunks, word alignment events, geometry evaluations, prefetch tasks) carry this `sessionId`.
+* Every reading invocation creates a unique session id (e.g. `read-1771968800000-a7b9c`), exposed as `sessionId` on the state machine and on the snapshot.
+* All downstream callbacks (TTS audio chunks, word alignment events, geometry evaluations) carry this `sessionId`.
 * If a callback arrives with a mismatched or stale `sessionId`, it is immediately discarded:
 
 ```typescript
