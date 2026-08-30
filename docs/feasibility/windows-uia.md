@@ -1,5 +1,51 @@
 # Windows UI Automation (UIA) Feasibility Analysis
 
+## 0. Owner Acceptance Status
+
+This slice was **accepted as a Windows UIA feasibility milestone**. Acceptance is deliberately
+narrow. It records what was established, and it does **not** discharge the debt listed below.
+
+**Accepted as established:**
+
+* current UIA inspection feasibility;
+* overlay feasibility within the tested boundary;
+* reader-controller contract behaviour;
+* simulator-based TTS contract behaviour;
+* companion lifecycle and watchdog behaviour, with the committed runtime evidence in §2 Tier 1b;
+* the limitations documented in this file.
+
+**Explicitly not claimed by this slice:**
+
+* production-ready window-move tracking;
+* mixed-DPI multi-monitor correctness;
+* complete UIA compatibility telemetry;
+* kernel-level job-object lifetime protection;
+* elevated / cross-session watchdog proof;
+* live TTS or audio delivery.
+
+**Accepted debt — carried forward, not solved.** Each remains open input to a future slice:
+window-move tracking is not wired end to end; `ProcessJobTracker` is unwired; no committed UIA
+scanner-runtime artifact exists; there is no C# test project; mixed-DPI overlay behaviour is
+unproven; the cross-session / elevated-parent watchdog path is unproven because it needs
+privileged setup; no CI is configured; and the pre-staged `ws` dependency and unlabelled prototype
+adapters are untidy but non-blocking. Details are in §2 Tier 4.
+
+**Evidence-collection constraint.** UIA runtime evidence must **not** be gathered by running
+`yarn matrix:scan` against a normal live desktop and committing the output — the scan inspects
+every visible window of its target process set and could capture information about whatever the
+operator had open. Collect it only in a **controlled test environment** with deliberately opened
+applications and documents, and inspect the raw output before committing. The missing artifact is
+accepted for this slice; that acceptance is a constraint on how evidence is collected, **not**
+evidence that UIA runtime behaviour was proven.
+
+**Window-tracking / UIA threading is a separate architecture slice.** No architecture choice is
+made here. That slice must explicitly evaluate the message-pump and COM apartment problem,
+including at least: owning UIA on the dispatcher / message-pump thread; marshaling tracking events
+to a dedicated UIA-owning STA; and restructuring the companion so its UIA-owning STA is not
+blocked indefinitely in `Console.ReadLine()`.
+
+---
+
 ## 1. Executive Summary & Core Verdict
 
 **Can ReadBridge reliably track text closely enough across ordinary Windows applications to make the original source application feel like it is reading aloud?**
@@ -47,7 +93,7 @@ These describe third-party APIs. No citation, retrieval date, or captured respon
 ### Tier 4: Known Gaps & Next-Slice Scope
 
 * **Mixed-DPI Multi-Monitor Setups**: A single WPF overlay covers `VirtualScreen` and converts coordinates with one DPI factor taken from the window's own monitor. On heterogeneous setups (e.g. 100% primary, 175% secondary) this distorts non-primary coordinates, and the window may not actually span the virtual screen, silently clipping highlights. Production Slice 3 will use per-monitor overlay instances or DirectComposition.
-* **Window movement tracking is not wired end to end.** `WindowTracker.cs` attaches an out-of-context `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` filtered to the target process id, but nothing re-resolves highlight geometry from it: the only consumer is the `highlight-test` demo, whose callback just writes a console line, and the `ipc` path constructs no tracker at all. Out-of-context hooks also require the installing thread to pump messages, which that demo thread does not do. **Highlights do not currently follow a window that is dragged or resized.**
+* **Window movement tracking is not wired end to end.** `WindowTracker.cs` attaches an out-of-context `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` filtered to the target process id, but nothing re-resolves highlight geometry from it: the only consumer is the `highlight-test` demo, whose callback just writes a console line, and the `ipc` path constructs no tracker at all. Out-of-context hooks also require the installing thread to pump messages, which that demo thread does not do. **Highlights do not currently follow a window that is dragged or resized.** This is accepted as outside this slice's completion boundary and is deferred to the separate window-tracking / UIA threading architecture slice described in §0.
 * **Sampling is capped, not exhaustive.** Word enumeration stops at `UiaEngine.WordSampleCap` (15) and document text is read through a `UiaEngine.DocumentTextProbeChars` (500) probe. Scanner output reports what was sampled; it is not full-document coverage.
 * **No kernel-level lifetime backstop.** `ProcessJobTracker.cs` implements a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` tracker but is never instantiated; the guarantee is not in force. Companion lifetime rests on the `--parent-pid` watchdog plus stdin EOF. Wiring the job object requires the handle to be owned by the launching host, which is a lifecycle-architecture change rather than a patch.
 * **No C# test project.** Every claim about the native companion is currently guarded only by the Node-level lifecycle checks above.

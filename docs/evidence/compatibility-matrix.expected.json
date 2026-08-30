@@ -2,8 +2,9 @@
   {
     "_note": "ANALYST-AUTHORED EXPECTED CAPABILITY PROFILE - NOT SCANNER OUTPUT.",
     "_detail": "Hand-written expectations about how these applications should behave under UI Automation. The shape mirrors ApplicationCompatibilityRecord, but many values here cannot be emitted by UiaEngine.EvaluateCompatibility under any input: it assigns 'application' and 'processName' from the same expression so they can never differ, emits one record per HWND (so merged multi-process rows are unproducible), reads no target version metadata, and has exactly two possible values for 'recommendedCapabilityLevel' (LEVEL B / LEVEL C) with no LEVEL A branch.",
-    "_howToGetRealData": "Run `yarn matrix:scan` with the target applications open and commit its raw stdout alongside this file. Until then, treat every row below as an expectation to be tested, not as a finding.",
-    "_reachability": "`matrix-scan` only inspects processes named notepad, code, chrome, brave, msedge, winword, discord or slack. The Acrobat Reader (AcroRd32) entry below is therefore not reachable by the committed harness at all."
+    "_howToGetRealData": "CONSTRAINED. Do NOT run `yarn matrix:scan` against a normal live desktop and commit the result: it inspects every visible window of its target process set, so the artifact could capture information about whatever applications and browser state the operator happened to have open. Collect UIA runtime evidence only in a controlled test environment with deliberately opened applications and documents, and inspect the raw output before committing it.",
+    "_reachability": "`matrix-scan` only inspects processes named notepad, code, chrome, brave, msedge, winword, discord or slack. The Acrobat Reader (AcroRd32) entry below is therefore not reachable by the committed harness at all.",
+    "_ownerDisposition": "The absence of a committed UIA scanner-runtime artifact is ACCEPTED for the Windows UIA feasibility slice (PR #1). Acceptance records a collection constraint - it is NOT evidence that UIA runtime behaviour was proven. Every row below remains an untested expectation."
   },
   {
     "application": "Notepad",

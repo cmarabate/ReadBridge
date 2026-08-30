@@ -42,6 +42,11 @@ yarn evidence:lifecycle  # re-record docs/evidence/companion-lifecycle-runtime.j
 `matrix:scan` inspects **all** visible windows belonging to its target process set, including
 applications you already had open — not just ones a script launched.
 
+> **Do not commit `matrix:scan` output taken from a normal live desktop.** Because it sweeps every
+> visible target window, the result can capture information about whatever applications and browser
+> state you had open. Gather UIA runtime evidence only in a controlled test environment with
+> deliberately opened applications and documents, and inspect the raw output before committing it.
+
 ## Scripts
 
 * `scripts/run_lifecycle_runtime_checks.js` — deterministic companion lifecycle checks (startup,

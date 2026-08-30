@@ -6,9 +6,16 @@
 > shape of `ApplicationCompatibilityRecord`; several of its values cannot be produced by
 > `UiaEngine.EvaluateCompatibility` under any input, which is called out in that file's header.
 >
-> To turn this into evidence: run `yarn matrix:scan` with the target applications open and commit
-> its raw stdout alongside these files. The only runtime evidence committed in this slice is
-> `companion-lifecycle-runtime.json` (process lifecycle, not UIA behaviour).
+> **Evidence-collection constraint.** Do **not** run `yarn matrix:scan` against a normal live
+> desktop and commit the result: it inspects every visible window of its target process set, so the
+> artifact could capture information about whatever applications and browser state the operator had
+> open. UIA runtime evidence is to be collected only in a **controlled test environment** with
+> deliberately opened applications and documents, with the raw output inspected before commit.
+>
+> The absence of that artifact is **accepted** for this feasibility slice (PR #1). That acceptance
+> is a collection constraint — it is **not** evidence that UIA runtime behaviour was proven. The
+> only runtime evidence committed in this slice is `companion-lifecycle-runtime.json` (process
+> lifecycle, not UIA behaviour).
 
 ## Environment Context
 
