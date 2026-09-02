@@ -79,43 +79,86 @@ and the evidence harness's provider have been.
 
 ---
 
-## 2. Cartesia WebSocket Specification
+## 2. Cartesia WebSocket (REVALIDATED against the official reference, 2026-09-02)
+
+> Unlike the rest of this document, this section was checked against
+> <https://docs.cartesia.ai/api-reference/tts/tts> on 2026-09-02 rather than transcribed
+> from memory. **Two facts the earlier draft asserted were wrong**, and one mechanism it
+> did not know about turns out to matter for flow control. Still specification, not
+> observed traffic: no live call has been made.
 
 * **Endpoint**: `wss://api.cartesia.ai/tts/websocket`
-* **Version Header**: `Cartesia-Version: 2024-06-10`
+* **Version**: a `cartesia_version` **query parameter** (e.g. `2026-08-14`) — **not** the
+  `Cartesia-Version: 2024-06-10` *header* this document previously claimed.
+* **Auth**: `X-API-Key` header, or an `access_token` query parameter. Never hardcoded, never
+  logged, never committed — injected from environment or config at construction.
+* **Models**: `sonic-3.6`, `sonic-3.5`, `sonic-3`, `sonic-latest`. The earlier draft named
+  `sonic-3.5` and `sonic-3.6`; both are still valid, and `sonic-3` and `sonic-latest` were
+  not listed before.
+* **Encodings**: `pcm_f32le`, `pcm_s16le`, `pcm_mulaw`, `pcm_alaw`, container `raw` only.
+  Sample rates 8000 / 16000 / 22050 / 24000 / 44100 / 48000. ReadBridge's playback session
+  currently accepts PCM matching its opening format, so `pcm_s16le` at 24000 is the
+  natural pairing.
 
-### Input Payload:
+### Request
+
 ```json
 {
-  "model_id": "sonic-3.5",
+  "model_id": "sonic-3.6",
   "transcript": "Hello, world! ",
-  "voice": {
-    "mode": "id",
-    "id": "a0e99841-438c-4a64-b679-ae501e7d6091"
-  },
-  "output_format": {
-    "container": "raw",
-    "encoding": "pcm_s16le",
-    "sample_rate": 24000
-  },
-  "context_id": "7b8f9e60-6421-4cf1-b65a-04b78a9c3d12",
+  "voice": { "mode": "id", "id": "<voice-id>" },
+  "output_format": { "container": "raw", "encoding": "pcm_s16le", "sample_rate": 24000 },
+  "context_id": "<uuid>",
   "continue": true,
   "add_timestamps": true
 }
 ```
 
-### Word Timestamps Response:
-```json
-{
-  "type": "timestamps",
-  "context_id": "7b8f9e60-6421-4cf1-b65a-04b78a9c3d12",
-  "word_timestamps": {
-    "words": ["Hello,", "world!"],
-    "start": [0.00, 0.45],
-    "end": [0.42, 0.91]
-  }
-}
-```
+`flush` is also accepted, and is acknowledged by a `flush_done` carrying a `flush_id`
+counter — a message type the earlier draft did not mention at all.
+
+### Responses
+
+| `type` | Carries |
+| :--- | :--- |
+| `chunk` | `data` (**base64** audio), `done`, `status_code`, `step_time`, `context_id` |
+| `timestamps` | `word_timestamps: { words[], start[], end[] }` — **times in seconds** |
+| `flush_done` | `flush_id` |
+| `done` | `done: true` |
+| `error` | `title`, `message`, `error_code`, `status_code` |
+
+Cancellation is `{ "context_id": "...", "cancel": true }`.
+
+### How a Cartesia client must satisfy the RB-AF1 flow-control contract
+
+This is the question that actually gates a live implementation, and the answer is not
+obvious from the protocol.
+
+**Cartesia pushes.** Once a transcript is sent, the server streams `chunk` and `timestamps`
+messages at its own pace. There is no documented "stop sending" message, so a client
+cannot satisfy `suspendOutput()` by asking the server to pause.
+
+It must therefore satisfy it **on its own side**, in two parts:
+
+1. **Stop feeding the server.** While suspended, send no further transcript continuation.
+   This bounds how much the server will generate, because it only generates what it has
+   been given.
+2. **Keep reading the socket, but stop delivering.** The tail already in flight must still
+   be read — refusing to read would apply TCP backpressure and eventually stall or
+   time out the connection — but it must be queued in order rather than handed to
+   `onAudioChunk` / `onWordAlignment`. `resumeOutput()` then drains that queue in order
+   before resuming live delivery.
+
+That satisfies the contract exactly: quiescence holds (no callback after `suspendOutput()`
+resolves), continuation is exact (an ordered queue has no duplicates and no skips), and the
+session identity, `context_id` and position are all preserved.
+
+**The cost is a bounded client-side buffer**, holding whatever the server had already
+generated when the suspension landed. That is finite because of (1). **This bound has not
+been measured**, and measuring it is part of the live-provider slice, not this document.
+
+**Conclusion: Cartesia can satisfy the contract cleanly.** No change to
+`ITtsStreamSession`, `ReaderController` or VoiceMediaBridge is required to accommodate it.
 
 ---
 
@@ -142,9 +185,11 @@ and the evidence harness's provider have been.
 
 In Slice 2:
 1. Implement live `CartesiaWebSocketClient` streaming PCM into the existing `IAudioPlaybackSink`
-   seam, satisfying the §0 flow-control contract over its WebSocket. (The Web Audio worklet named in
-   this plan does not apply: ReadBridge has no browser host, and audio output lives in the Windows
-   companion — see [`audio-playback.md`](audio-playback.md) §2.)
+   seam, satisfying the §0 flow-control contract by the two-part client-side mechanism in §2.
+   (The Web Audio worklet named in earlier drafts does not apply: ReadBridge has no browser host,
+   and audio output lives in the Windows companion — see
+   [`audio-playback.md`](audio-playback.md) §2.) Credentials are injected from environment or
+   config, never hardcoded and never committed.
 2. Implement live `ElevenLabsWebSocketClient` with single-use ephemeral token auth, likewise
    satisfying §0.
 3. Measure live empirical round-trip latencies, buffer continuity, and audio/highlight synchronization under network jitter.
