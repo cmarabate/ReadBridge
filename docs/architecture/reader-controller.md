@@ -2,7 +2,14 @@
 
 ## 1. Single Authority Principle
 
-All playback state, text acquisition, synchronization, and visual highlighting are owned by a single authority: `ReaderController`. (Audio output routing is Slice 2 scope: the simulated providers emit placeholder buffers and nothing plays them.)
+All playback state, text acquisition, synchronization, and visual highlighting are owned by a single authority: `ReaderController`.
+
+Audio output is real. `ReaderController` drives an `IAudioPlaybackSession` whose `pause` and
+`resume` suspend and restore an actual Windows audio device, and its `playing` / `paused` states
+are confirmed against that output rather than asserted. The playback contract, the backend, and
+what is and is not proven about it are in
+[`audio-playback.md`](audio-playback.md). Live cloud TTS is still not implemented: the providers
+remain simulators, so the audio being played is simulator-produced.
 
 ```
                     ┌─────────────────────────┐
@@ -18,7 +25,7 @@ All playback state, text acquisition, synchronization, and visual highlighting a
                     ┌─────────────────────────┐
                     │        preparing        │ ◄── Initialize TTS stream & parse sentence boundaries
                     └────────────┬────────────┘
-                                 │ audio ready / first chunk
+                                 │ playback session ACCEPTED audio
                                  ▼
                     ┌─────────────────────────┐
        ┌───────────►│         playing         │◄──────────┐
@@ -47,6 +54,17 @@ All playback state, text acquisition, synchronization, and visual highlighting a
 controller — the `seek()` edge above is planned, not implemented. Overlay teardown and WinEvent
 hook release live in the native companion, not in `ReaderController`, which holds no overlay
 handle, companion client, or hook.
+
+**The transitions above are gated on real output, not on intent:**
+
+* `preparing` → `playing` happens when the playback session accepts audio, never merely because a
+  TTS stream object exists.
+* `playing` → `paused` happens only after the output has reported that it paused. A refused pause
+  throws and leaves the state at `playing`, which is the truth.
+* `paused` → `playing` uses the **same** playback session and the same read `sessionId`; no new TTS
+  session is created, the document is not re-acquired, and `canonicalTextOffset` is not reset.
+* `playing` → `idle` on its own happens when the **audio output drains**. A TTS stream's `isFinal`
+  means its input ended; it calls `completeInput()` on the playback session and nothing more.
 
 ## 2. Session Token (`sessionId`) Integrity
 
@@ -77,8 +95,31 @@ export interface PlaybackStateSnapshot {
   currentWord: string | null;
   activeGeometry: TextRangeGeometry | null;
   followMode: 'SOURCE_OVERLAY' | 'READER_SURFACE';
+  playbackSessionId: string | null;
+  playbackState: PlaybackSessionState | null;
+  lastObservedPlaybackPositionMs: number;
+  producesAudibleOutput: boolean;
   error: string | null;
 }
 ```
 
+`producesAudibleOutput` reports whether the configured sink drives a real device, so a consumer can
+never mistake `SimulatedAudioPlaybackSink` for one that makes sound.
+`lastObservedPlaybackPositionMs` is the last cursor the controller observed, not a live probe.
+
 No component outside `ReaderController` maintains independent state booleans (`isPlaying`, `isPaused`, `isHighlighting`).
+
+## 4. Session fencing across two tokens
+
+`ReaderStateMachine.sessionId` is deliberately retained across `stop()` so the machine can report
+which read reached idle. That means it alone would still admit a callback from a read that has
+already ended, so `ReaderController` also holds `activeReadSessionId`, cleared the moment a read
+ends, and fences every callback on **both** tokens. The playback session id is the same string, so
+playback ownership and read ownership cannot drift apart.
+
+## 5. Audio-focus seam
+
+`suspendForAudioFocusAsync()` / `resumeForAudioFocusAsync()` are a narrow internal entry point for a
+future external audio-focus arbiter. They delegate to the same `pause()` / `resume()` path, add no
+second pause mechanism, and report whether output is genuinely suspended or playing. Nothing is
+connected to them; there is no VoiceMediaBridge code in this repository.

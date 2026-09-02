@@ -8,9 +8,19 @@ export interface IpcResponse {
   error?: string;
 }
 
+/**
+ * An unsolicited message from the companion, correlated to nothing. Audio playback drains on a
+ * background thread in the companion, so its completion cannot be the reply to a request.
+ */
+export interface CompanionEvent {
+  event: string;
+  [key: string]: any;
+}
+
 export class NativeCompanionClient {
   private process: ChildProcess | null = null;
   private pendingRequests = new Map<string, { resolve: (val: any) => void; reject: (err: Error) => void }>();
+  private eventListeners: Array<(evt: CompanionEvent) => void> = [];
   private requestCounter = 0;
 
   constructor(private companionExecutablePath?: string) {
@@ -48,7 +58,17 @@ export class NativeCompanionClient {
     rl.on('line', (line) => {
       if (!line.trim()) return;
       try {
-        const resp: IpcResponse = JSON.parse(line);
+        const resp: IpcResponse & Partial<CompanionEvent> = JSON.parse(line);
+
+        // Events carry no request id and must be dispatched before the correlation path, which
+        // would otherwise drop them as an unrecognised reply.
+        if (typeof resp.event === 'string') {
+          for (const listener of [...this.eventListeners]) {
+            listener(resp as CompanionEvent);
+          }
+          return;
+        }
+
         if (resp.id && this.pendingRequests.has(resp.id)) {
           const { resolve, reject } = this.pendingRequests.get(resp.id)!;
           this.pendingRequests.delete(resp.id);
@@ -116,6 +136,14 @@ export class NativeCompanionClient {
 
   public async ping(): Promise<string> {
     return this.call('ping');
+  }
+
+  /** Subscribe to unsolicited companion events (e.g. `playbackCompleted`). */
+  public onEvent(listener: (evt: CompanionEvent) => void): () => void {
+    this.eventListeners.push(listener);
+    return () => {
+      this.eventListeners = this.eventListeners.filter((l) => l !== listener);
+    };
   }
 
   private rejectPending(err: Error): void {

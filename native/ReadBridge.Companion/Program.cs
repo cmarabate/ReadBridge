@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using Interop.UIAutomationClient;
+using ReadBridge.Companion.Audio;
 using ReadBridge.Companion.Infrastructure;
 using ReadBridge.Companion.Models;
 using ReadBridge.Companion.Overlay;
@@ -309,6 +310,52 @@ namespace ReadBridge.Companion
         private const int OverlayTeardownTimeoutMs = 2000;
 
         /// <summary>
+        /// Serializes every line written to the IPC channel. Playback completion is announced from
+        /// a background monitor thread, so responses and events would otherwise be able to
+        /// interleave mid-line and corrupt the newline-delimited protocol.
+        /// </summary>
+        private static readonly object IpcWriteGate = new object();
+
+        private static void Emit(object payload)
+        {
+            string line = JsonSerializer.Serialize(payload);
+            lock (IpcWriteGate)
+            {
+                Console.WriteLine(line);
+                Console.Out.Flush();
+            }
+        }
+
+        private static string RequiredString(JsonElement parameters, string name)
+        {
+            if (!parameters.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+            {
+                throw new ArgumentException($"'{name}' is required and must be a string.");
+            }
+            return value.GetString()!;
+        }
+
+        private static int OptionalInt(JsonElement parameters, string name, int fallback)
+        {
+            return parameters.TryGetProperty(name, out var value) && value.TryGetInt32(out int parsed)
+                ? parsed
+                : fallback;
+        }
+
+        private static object PlaybackPayload(string id, PlaybackCommandResult r) => new
+        {
+            id,
+            result = new
+            {
+                ok = r.Ok,
+                reason = r.Reason,
+                state = r.State.ToString().ToLowerInvariant(),
+                positionMs = r.PositionMs,
+                queuedBytes = r.QueuedBytes,
+            },
+        };
+
+        /// <summary>
         /// Completes only once the parent process is actually observed to be gone.
         /// A direct exit-wait handle is preferred, but if one cannot be obtained (for example a
         /// cross-session or higher-integrity host denies SYNCHRONIZE access) this degrades to
@@ -405,6 +452,14 @@ namespace ReadBridge.Companion
             }
 
             using var overlay = new OverlayController();
+            using var audio = new AudioPlaybackHost();
+
+            audio.SessionCompleted += (sessionId, positionMs) => Emit(new
+            {
+                @event = "playbackCompleted",
+                sessionId,
+                positionMs,
+            });
 
             if (parentPid > 0)
             {
@@ -448,6 +503,9 @@ namespace ReadBridge.Companion
                     var root = doc.RootElement;
                     string method = root.GetProperty("method").GetString() ?? string.Empty;
                     string id = root.TryGetProperty("id", out var idProp) ? idProp.GetString() ?? "" : "";
+                    JsonElement audioParams = root.TryGetProperty("params", out var paramsProp)
+                        ? paramsProp
+                        : default;
 
                     switch (method)
                     {
@@ -455,8 +513,7 @@ namespace ReadBridge.Companion
                         {
                             var inspection = UiaEngine.InspectForegroundWindow();
                             var compat = UiaEngine.EvaluateCompatibility(inspection);
-                            var resp = new { id, result = new { inspection, compatibility = compat } };
-                            Console.WriteLine(JsonSerializer.Serialize(resp));
+                            Emit(new { id, result = new { inspection, compatibility = compat } });
                             break;
                         }
                         case "showHighlight":
@@ -475,28 +532,123 @@ namespace ReadBridge.Companion
                                 }
                             }
                             overlay.ShowHighlights(null, wordBounds);
-                            Console.WriteLine(JsonSerializer.Serialize(new { id, result = "ok" }));
+                            Emit(new { id, result = "ok" });
                             break;
                         }
                         case "clearHighlight":
                         {
                             overlay.Clear();
-                            Console.WriteLine(JsonSerializer.Serialize(new { id, result = "ok" }));
+                            Emit(new { id, result = "ok" });
                             break;
                         }
                         case "ping":
                         {
-                            Console.WriteLine(JsonSerializer.Serialize(new { id, result = "pong" }));
+                            Emit(new { id, result = "pong" });
                             break;
                         }
+
+                        // ---- Audio playback session -------------------------------------
+                        // Every audio method names the playback session it addresses. The host
+                        // refuses anything that is not the current session, so a late command
+                        // from an abandoned read cannot reach whatever is playing now.
+                        case "audioOpen":
+                        {
+                            var r = audio.Open(
+                                RequiredString(audioParams, "sessionId"),
+                                OptionalInt(audioParams, "sampleRate", 24000),
+                                OptionalInt(audioParams, "channels", 1),
+                                OptionalInt(audioParams, "bitDepth", 16));
+                            Emit(PlaybackPayload(id, r));
+                            break;
+                        }
+                        case "audioWrite":
+                        {
+                            string sessionId = RequiredString(audioParams, "sessionId");
+                            byte[] pcm = audioParams.TryGetProperty("audioBase64", out var b64)
+                                && b64.ValueKind == JsonValueKind.String
+                                    ? Convert.FromBase64String(b64.GetString()!)
+                                    : Array.Empty<byte>();
+
+                            var w = audio.Write(sessionId, pcm);
+                            Emit(new
+                            {
+                                id,
+                                result = new
+                                {
+                                    accepted = w.Accepted,
+                                    reason = w.Reason,
+                                    state = w.State.ToString().ToLowerInvariant(),
+                                    positionMs = w.PositionMs,
+                                    queuedBytes = w.QueuedBytes,
+                                    maxQueuedBytes = w.MaxQueuedBytes,
+                                },
+                            });
+                            break;
+                        }
+                        case "audioCompleteInput":
+                        {
+                            Emit(PlaybackPayload(id, audio.CompleteInput(RequiredString(audioParams, "sessionId"))));
+                            break;
+                        }
+                        case "audioPause":
+                        {
+                            Emit(PlaybackPayload(id, audio.Pause(RequiredString(audioParams, "sessionId"))));
+                            break;
+                        }
+                        case "audioResume":
+                        {
+                            Emit(PlaybackPayload(id, audio.Resume(RequiredString(audioParams, "sessionId"))));
+                            break;
+                        }
+                        case "audioStop":
+                        {
+                            Emit(PlaybackPayload(id, audio.Stop(RequiredString(audioParams, "sessionId"))));
+                            break;
+                        }
+                        case "audioStatus":
+                        {
+                            Emit(PlaybackPayload(id, audio.Status(RequiredString(audioParams, "sessionId"))));
+                            break;
+                        }
+                        case "audioDeviceInfo":
+                        {
+                            Emit(new
+                            {
+                                id,
+                                result = new
+                                {
+                                    hasOutputDevice = audio.HasOutputDevice,
+                                    outputDeviceCount = NativeMethods.waveOutGetNumDevs(),
+                                    currentSessionId = audio.CurrentSessionId,
+                                },
+                            });
+                            break;
+                        }
+
                         default:
-                            Console.WriteLine(JsonSerializer.Serialize(new { id, error = $"Unknown method {method}" }));
+                            Emit(new { id, error = $"Unknown method {method}" });
                             break;
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new { error = ex.Message }));
+                    // Correlate the failure with its request where possible: an uncorrelated error
+                    // leaves the caller's promise pending forever.
+                    string failedId = "";
+                    try
+                    {
+                        using var reparsed = JsonDocument.Parse(line);
+                        if (reparsed.RootElement.TryGetProperty("id", out var idElem) && idElem.ValueKind == JsonValueKind.String)
+                        {
+                            failedId = idElem.GetString() ?? "";
+                        }
+                    }
+                    catch
+                    {
+                        // The line was not parseable JSON; there is no id to report.
+                    }
+
+                    Emit(new { id = failedId, error = ex.Message });
                 }
             }
 

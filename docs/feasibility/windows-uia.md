@@ -23,6 +23,13 @@ narrow. It records what was established, and it does **not** discharge the debt 
 * elevated / cross-session watchdog proof;
 * live TTS or audio delivery.
 
+> **Superseded in part by RB-AF0.** *Audio delivery* is no longer unclaimed: a resumable Windows
+> audio playback session is now implemented and runtime-proven — see
+> [`../architecture/audio-playback.md`](../architecture/audio-playback.md) and
+> [`../evidence/playback-runtime.json`](../evidence/playback-runtime.json). **Live TTS remains
+> unclaimed and unimplemented**: the providers are still simulators and no network call is made.
+> Nothing else in this acceptance record is altered by that slice.
+
 **Accepted debt — carried forward, not solved.** Each remains open input to a future slice:
 window-move tracking is not wired end to end; `ProcessJobTracker` is unwired; no committed UIA
 scanner-runtime artifact exists; there is no C# test project; mixed-DPI overlay behaviour is

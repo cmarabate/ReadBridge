@@ -3,7 +3,11 @@
 > **Status.** The providers shipped in `src/core/tts/providers/` are in-memory simulators
 > (`SimulatedCartesiaTtsProvider`, `SimulatedElevenLabsTtsProvider`, `SimulatedOpenAiTtsProvider`).
 > No WebSocket is opened and no network call is made anywhere in this slice; the simulators derive
-> word timings by splitting text on whitespace. Everything below is a **specification for Slice 2**,
+> word timings by splitting text on whitespace, and emit a fixed placeholder audio buffer rather
+> than speech. Audio *playback* is now real (see [`audio-playback.md`](audio-playback.md)) — what it
+> plays is simulator output, not synthesized speech.
+>
+> Everything below is a **specification for Slice 2**,
 > transcribed from vendor documentation without a citation or retrieval date and **not** observed
 > traffic. Re-verify against live vendor docs before implementing.
 
@@ -83,6 +87,9 @@
 ## 4. Implementation Plan for Slice 2 (Streaming Audio & Live TTS)
 
 In Slice 2:
-1. Implement live `CartesiaWebSocketClient` with Web Audio API PCM streaming worklet.
+1. Implement live `CartesiaWebSocketClient` streaming PCM into the existing `IAudioPlaybackSink`
+   seam. (The Web Audio worklet named in this plan does not apply: ReadBridge has no browser host,
+   and audio output lives in the Windows companion — see
+   [`audio-playback.md`](audio-playback.md) §2.)
 2. Implement live `ElevenLabsWebSocketClient` with single-use ephemeral token auth.
 3. Measure live empirical round-trip latencies, buffer continuity, and audio/highlight synchronization under network jitter.

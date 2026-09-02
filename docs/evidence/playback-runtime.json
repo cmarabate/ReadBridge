@@ -1,0 +1,126 @@
+{
+  "harness": "scripts/run_playback_runtime_checks.js",
+  "platform": "win32 x64",
+  "node": "v22.16.0",
+  "audioBackend": "WinMM waveOut (companion), WAVE_MAPPER, PCM 24000Hz/1ch/16bit",
+  "testSignal": "220 Hz sine at approximately -46 dBFS",
+  "cases": [
+    {
+      "id": "P1-output-device-present",
+      "outcome": "PASS",
+      "companionPid": 72476,
+      "ping": "pong",
+      "hasOutputDevice": true,
+      "outputDeviceCount": 11
+    },
+    {
+      "id": "P2-playing-only-after-audio-accepted",
+      "outcome": "PASS",
+      "stateAtOpen": "created",
+      "stateAfterFirstWrite": "playing",
+      "writeAccepted": true,
+      "audioWrittenMs": 2000
+    },
+    {
+      "id": "P3-cursor-advances-while-playing",
+      "outcome": "PASS",
+      "positionAtStartMs": 0,
+      "positionAfter300msMs": 295,
+      "positionAfter600msMs": 597
+    },
+    {
+      "id": "P4-pause-freezes-device-cursor",
+      "outcome": "PASS",
+      "positionAtPauseMs": 611,
+      "wallClockHeldPausedMs": 900,
+      "positionAfterHoldMs": 611,
+      "cursorDriftMs": 0
+    },
+    {
+      "id": "P5-resume-continues-same-session-not-restart",
+      "outcome": "PASS",
+      "positionAtResumeMs": 611,
+      "positionAfterObserveMs": 894,
+      "observationWindowMs": 300,
+      "advancedSincePauseMs": 283,
+      "restartedFromZero": false,
+      "pausedTimeCreditedToPlayback": false
+    },
+    {
+      "id": "P6-repeated-pause-and-resume-are-safe",
+      "outcome": "PASS",
+      "repeatedPause": {
+        "ok": true,
+        "reason": "alreadyPaused",
+        "state": "paused"
+      },
+      "repeatedResume": {
+        "ok": true,
+        "reason": "alreadyPlaying",
+        "state": "playing"
+      }
+    },
+    {
+      "id": "P7-stale-session-cannot-control-live-playback",
+      "outcome": "PASS",
+      "stalePause": {
+        "ok": false,
+        "reason": "staleSession"
+      },
+      "staleStop": {
+        "ok": false,
+        "reason": "staleSession"
+      },
+      "staleWrite": {
+        "accepted": false,
+        "reason": "staleSession"
+      },
+      "liveStateAfterStaleCommands": "playing"
+    },
+    {
+      "id": "P8-stop-is-terminal",
+      "outcome": "PASS",
+      "stopState": "stopped",
+      "positionAtStopMs": 911,
+      "resumeAfterStop": {
+        "ok": false,
+        "reason": "staleSession"
+      }
+    },
+    {
+      "id": "P9-natural-completion-is-output-drain-not-input-end",
+      "outcome": "PASS",
+      "audioWrittenMs": 700,
+      "stateWhenTtsInputCompleted": "playing",
+      "completionEventReceived": true,
+      "completionPositionMs": 700,
+      "stateAfterCompletion": "completed",
+      "resumeAfterCompletion": {
+        "ok": false,
+        "reason": "terminalState"
+      }
+    },
+    {
+      "id": "P10-replacement-session-takes-sole-ownership",
+      "outcome": "PASS",
+      "previousSessionAfterReplacement": {
+        "ok": false,
+        "reason": "staleSession"
+      },
+      "currentSessionId": "evid-second"
+    },
+    {
+      "id": "P11-companion-serving-then-clean-shutdown",
+      "outcome": "PASS",
+      "finalPing": "pong",
+      "exitObservedWithinMs": 50
+    },
+    {
+      "id": "P12-orphan-census-final",
+      "outcome": "PASS",
+      "companionPidsBefore": [],
+      "companionPidsAfter": []
+    }
+  ],
+  "failureCount": 0
+}

@@ -1,3 +1,5 @@
+import { PlaybackSessionState } from './audio/playback-interface.js';
+
 export type ReaderLifecycleState =
   | 'idle'
   | 'acquiring'
@@ -83,5 +85,20 @@ export interface PlaybackStateSnapshot {
   currentWord: string | null;
   activeGeometry: TextRangeGeometry | null;
   followMode: 'SOURCE_OVERLAY' | 'READER_SURFACE';
+  /** Identity of the playback session backing this read; null before audio output has opened. */
+  playbackSessionId: string | null;
+  /** Last playback state observed from the audio output. Null before output has opened. */
+  playbackState: PlaybackSessionState | null;
+  /**
+   * Last output cursor observed, in milliseconds of audio rendered. It is a mirror updated when
+   * the controller talks to the output, not a live probe.
+   */
+  lastObservedPlaybackPositionMs: number;
+  /**
+   * Whether the configured audio sink drives a real device. `false` means playback semantics are
+   * modelled faithfully but nothing is audible - surfaced so no consumer can mistake one for the
+   * other.
+   */
+  producesAudibleOutput: boolean;
   error: string | null;
 }

@@ -2,12 +2,15 @@
 
 Universal Windows AI Read Aloud with synchronized text highlighting across applications.
 
-> **Slice status.** This repository currently contains the **Windows UI Automation feasibility
-> slice**: a native companion that inspects UIA text providers and renders a click-through
-> highlight overlay, plus a TypeScript reader controller driven by in-memory TTS simulators. There
-> is no live text-to-speech, no audio playback, and no browser extension yet. Read
-> [`docs/feasibility/windows-uia.md`](docs/feasibility/windows-uia.md) — especially §2, which
-> separates what is proven from what is expected — before drawing conclusions from anything here.
+> **Slice status.** This repository contains the **Windows UI Automation feasibility slice** plus
+> the **resumable audio playback session** (RB-AF0). The native companion inspects UIA text
+> providers, renders a click-through highlight overlay, and now drives a real Windows audio device
+> whose playback can genuinely pause, stay suspended, and resume the *same* session from the *same*
+> position. There is still **no live text-to-speech** — the TTS providers are in-memory simulators,
+> no network call is made, and no credential handling exists — and there is no browser extension
+> and no UI. Read [`docs/feasibility/windows-uia.md`](docs/feasibility/windows-uia.md) §2 and
+> [`docs/architecture/audio-playback.md`](docs/architecture/audio-playback.md) §6, which separate
+> what is proven from what is expected, before drawing conclusions from anything here.
 
 ## Prerequisites
 
@@ -25,10 +28,13 @@ yarn verify:ts      # typecheck only
 yarn verify:lint    # eslint
 ```
 
-`yarn test:ci` passes on a fresh clone. The companion lifecycle tests need the built companion
-binary, which lives under a gitignored `bin/`, so they **skip** until you run `yarn verify:build`
-on Windows. To make that skip a failure instead — on a run that is meant to exercise the
-companion — set `READBRIDGE_REQUIRE_COMPANION=1`.
+`yarn test:ci` passes on a fresh clone. The companion lifecycle tests and the real-device playback
+tests need the built companion binary, which lives under a gitignored `bin/`, so they **skip** until
+you run `yarn verify:build` on Windows. To make that skip a failure instead — on a run that is meant
+to exercise the companion — set `READBRIDGE_REQUIRE_COMPANION=1`.
+
+`tests/playback-runtime.test.ts` plays a few seconds of a quiet test tone through a real output
+device; see the note under `yarn evidence:playback` below.
 
 ## Running the companion
 
@@ -37,7 +43,13 @@ yarn inspect:live        # inspect the current foreground window's UIA text prov
 yarn matrix:scan         # inspect every visible window whose process is in the target set
 yarn highlight:test      # step the overlay across the first words of the focused window
 yarn evidence:lifecycle  # re-record docs/evidence/companion-lifecycle-runtime.json
+yarn evidence:playback   # re-record docs/evidence/playback-runtime.json (plays a quiet test tone)
 ```
+
+`evidence:playback` opens a real audio output device and renders a 220 Hz tone at roughly -46 dBFS
+for a few seconds. `waveOut` opens in shared mode, so it does not interrupt other audio, and the
+tone is quiet enough not to intrude — but it is a real signal, which is what makes the recorded
+device cursor real.
 
 `matrix:scan` inspects **all** visible windows belonging to its target process set, including
 applications you already had open — not just ones a script launched.
@@ -52,6 +64,9 @@ applications you already had open — not just ones a script launched.
 * `scripts/run_lifecycle_runtime_checks.js` — deterministic companion lifecycle checks (startup,
   IPC, overlay, cancellation, shutdown, restart cycles, and the parent-watchdog A/B). Writes the
   committed evidence artifact.
+* `scripts/run_playback_runtime_checks.js` — deterministic audio playback checks against a real
+  output device (cursor advance, pause freeze, same-session resume, stale-session refusal, stop,
+  natural drain, orphan census). Writes the committed evidence artifact.
 * `scripts/run_matrix_tests.ps1` — launches each target application in turn and runs `inspect-proc`
   against it.
 * `scripts/scan_all_apps.ps1` — launches the target applications, then runs a single `matrix-scan`.
@@ -63,5 +78,6 @@ application windows** on your desktop.
 
 * [`docs/feasibility/windows-uia.md`](docs/feasibility/windows-uia.md) — feasibility verdict and evidence classification
 * [`docs/architecture/reader-controller.md`](docs/architecture/reader-controller.md) — playback state machine and session tokens
+* [`docs/architecture/audio-playback.md`](docs/architecture/audio-playback.md) — the resumable audio playback session, its Windows backend, and its runtime evidence
 * [`docs/architecture/tts-providers.md`](docs/architecture/tts-providers.md) — Slice 2 TTS provider specifications
 * [`docs/evidence/`](docs/evidence) — committed runtime evidence, and analyst-authored expectations clearly labelled as such
