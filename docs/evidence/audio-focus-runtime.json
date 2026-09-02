@@ -24,8 +24,8 @@
     {
       "id": "X2-readbridge-holds-focus-and-is-audible",
       "outcome": "PASS",
-      "readSessionId": "read-1788345578720-0f0fo2",
-      "playbackSessionId": "read-1788345578720-0f0fo2",
+      "readSessionId": "read-1788345799512-rb23a2",
+      "playbackSessionId": "read-1788345799512-rb23a2",
       "focusArbitrated": true,
       "holdsAudioFocus": true,
       "producesAudibleOutput": true,
@@ -37,8 +37,8 @@
       "outcome": "PASS",
       "voiceStartedOutcome": "NoPlayingSession",
       "deviceCursorBeforePreemptionMs": 390,
-      "deviceCursorWhenSuspensionLandedMs": 451,
-      "crossProcessPreemptionCostMs": 61,
+      "deviceCursorWhenSuspensionLandedMs": 421,
+      "crossProcessPreemptionCostMs": 31,
       "voiceStartedReason": null,
       "backgroundMediaOutcome": "NoPlayingSession",
       "readerStateAfterPreemption": "paused",
@@ -51,8 +51,8 @@
       "outcome": "PASS",
       "wallClockHeldSuspendedMs": 1500,
       "audioAuthorisedButUndeliveredMs": 59400,
-      "deviceCursorAtSuspendMs": 451,
-      "deviceCursorAfterHoldMs": 451,
+      "deviceCursorAtSuspendMs": 421,
+      "deviceCursorAfterHoldMs": 421,
       "cursorDriftMs": 0,
       "ttsDeliveriesAtSuspend": 4,
       "ttsDeliveriesAfterHold": 4,
@@ -74,9 +74,9 @@
     {
       "id": "X6-same-session-continues-from-the-same-cursor",
       "outcome": "PASS",
-      "deviceCursorAtSuspendMs": 451,
-      "deviceCursorAfterResumeMs": 868,
-      "advancedSinceSuspendMs": 417,
+      "deviceCursorAtSuspendMs": 421,
+      "deviceCursorAfterResumeMs": 836,
+      "advancedSinceSuspendMs": 415,
       "suspendedTimeCreditedToPlayback": false,
       "restartedFromZero": false,
       "duplicateChunksDelivered": 0,
@@ -93,7 +93,7 @@
     {
       "id": "X8-lower-participant-ending-while-preempted",
       "outcome": "PASS",
-      "readSessionId": "read-1788345581555-nser03",
+      "readSessionId": "read-1788345802333-2kqacu",
       "stateWhenPreempted": "paused",
       "stateAfterStopWhilePreempted": "idle",
       "dictateEndOutcome": "NoActiveLease",
@@ -111,14 +111,14 @@
     {
       "id": "X10-process-census",
       "outcome": "PASS",
-      "browserProxyPid": 68104,
+      "browserProxyPid": 67368,
       "browserProxyExitedOnStdinEof": true,
       "voiceMediaBridgeBefore": [],
       "voiceMediaBridgeAfter": [
-        90384
+        99288
       ],
       "newVoiceMediaBridgeProcesses": [
-        90384
+        99288
       ],
       "readBridgeCompanionsBefore": [],
       "readBridgeCompanionsAfter": [],
@@ -128,7 +128,7 @@
       "id": "X11-arbiter-exits-on-its-own-when-idle",
       "outcome": "PASS",
       "arbiterPids": [
-        90384
+        99288
       ],
       "stillRunningAfterIdleGrace": [],
       "note": "No service, no scheduled task, no autostart: nothing stays resident once no participant needs audio focus."
