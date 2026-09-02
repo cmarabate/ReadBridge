@@ -122,18 +122,21 @@ preemption.
 **PROVEN** (`docs/evidence/audio-focus-runtime.json` — real processes, real pipes, a real
 output device; no ChatGPT UI, no microphone, no cloud TTS, no user interaction):
 
+* `X0` four arbiters started at once leave **exactly one** listening, every loser exiting
+  `0` — a pipe name permits many server instances, so the named mutex is what makes one
+  authority;
 * `X1` ReadBridge discovers the **installed** VoiceMediaBridge, not a dev checkout;
 * `X2` it holds focus and is audible on a real device before anything else happens;
 * `X3` a synthetic Dictate `VOICE_STARTED` through the **real browser-proxy process**
-  preempts the exact read across two process boundaries in tens of milliseconds (31 ms in
+  preempts the exact read across two process boundaries in tens of milliseconds (33 ms in
   the committed run), and ReadBridge
   keeps its logical focus while suspended;
 * `X4` the suspension freezes the real device cursor with **0 ms drift across 1.5 s**
-  (421 ms → 421 ms), with **59.4 s of authorised-but-undelivered audio**, and freezes the
+  (420 ms → 420 ms), with **59.4 s of authorised-but-undelivered audio**, and freezes the
   highlight word;
 * `X5` `VOICE_ENDED` restores the same read, the same TTS stream and the same playback
   session (`SpokenOutputRestored`);
-* `X6` the cursor continues **421 ms → 836 ms** — 415 ms over a 400 ms window — with
+* `X6` the cursor continues **420 ms → 839 ms** — 419 ms over a 400 ms window — with
   **zero duplicate chunks** and no credit for the 1.5 s it spent suspended;
 * `X7` ending the read clears the focus episode;
 * `X8` a read that ends while preempted is **not** resurrected when Dictate ends;

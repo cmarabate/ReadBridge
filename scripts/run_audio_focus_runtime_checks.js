@@ -344,6 +344,34 @@ async function main() {
 
   if (!descriptor) throw new Error('VoiceMediaBridge is not installed; run tools/Install-NativeHost.ps1');
 
+  // X0: the startup race two clients can genuinely cause. Four arbiters are started at
+  // once; a named pipe alone permits many server instances, so if the single-instance
+  // mutex were not the authority, several could listen and the machine would have several
+  // audio-focus ledgers. Every loser must exit 0, or a client's connect-retry loop would
+  // treat losing the race as a failure.
+  const racers = [];
+  for (let i = 0; i < 4; i++) {
+    racers.push(spawn(descriptor.executablePath, ['--arbiter'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    }));
+  }
+  await sleep(3000);
+  const survivors = racers.filter((p) => p.exitCode === null && isAlive(p.pid));
+  const losers = racers.filter((p) => !survivors.includes(p));
+  record({
+    id: 'X0-single-instance-startup-race',
+    outcome: verdict(survivors.length === 1 && losers.every((p) => p.exitCode === 0)),
+    started: racers.map((p) => p.pid),
+    stillListening: survivors.map((p) => p.pid),
+    exitedWithCode: losers.map((p) => ({ pid: p.pid, code: p.exitCode })),
+    note: 'A pipe name permits many server instances; the named mutex is what makes one authority.',
+  });
+  for (const p of survivors) {
+    try { p.kill(); } catch { /* already gone */ }
+  }
+  await sleep(1000);
+
   const arbitersBefore = processCensus('VoiceMediaBridge.NativeHost');
   const companionsBefore = processCensus('ReadBridge.Companion');
 

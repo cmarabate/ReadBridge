@@ -22,23 +22,51 @@
       "dependsOnDevCheckout": false
     },
     {
+      "id": "X0-single-instance-startup-race",
+      "outcome": "PASS",
+      "started": [
+        77612,
+        11024,
+        81048,
+        9568
+      ],
+      "stillListening": [
+        77612
+      ],
+      "exitedWithCode": [
+        {
+          "pid": 11024,
+          "code": 0
+        },
+        {
+          "pid": 81048,
+          "code": 0
+        },
+        {
+          "pid": 9568,
+          "code": 0
+        }
+      ],
+      "note": "A pipe name permits many server instances; the named mutex is what makes one authority."
+    },
+    {
       "id": "X2-readbridge-holds-focus-and-is-audible",
       "outcome": "PASS",
-      "readSessionId": "read-1788345799512-rb23a2",
-      "playbackSessionId": "read-1788345799512-rb23a2",
+      "readSessionId": "read-1788346048844-6lwxik",
+      "playbackSessionId": "read-1788346048844-6lwxik",
       "focusArbitrated": true,
       "holdsAudioFocus": true,
       "producesAudibleOutput": true,
-      "deviceCursorAfter400msMs": 390,
+      "deviceCursorAfter400msMs": 387,
       "arbiterPipe": "VoiceMediaBridge.AudioFocus.v1.ff094c48c9ad"
     },
     {
       "id": "X3-dictate-preempts-readbridge-through-one-arbiter",
       "outcome": "PASS",
       "voiceStartedOutcome": "NoPlayingSession",
-      "deviceCursorBeforePreemptionMs": 390,
-      "deviceCursorWhenSuspensionLandedMs": 421,
-      "crossProcessPreemptionCostMs": 31,
+      "deviceCursorBeforePreemptionMs": 387,
+      "deviceCursorWhenSuspensionLandedMs": 420,
+      "crossProcessPreemptionCostMs": 33,
       "voiceStartedReason": null,
       "backgroundMediaOutcome": "NoPlayingSession",
       "readerStateAfterPreemption": "paused",
@@ -51,8 +79,8 @@
       "outcome": "PASS",
       "wallClockHeldSuspendedMs": 1500,
       "audioAuthorisedButUndeliveredMs": 59400,
-      "deviceCursorAtSuspendMs": 421,
-      "deviceCursorAfterHoldMs": 421,
+      "deviceCursorAtSuspendMs": 420,
+      "deviceCursorAfterHoldMs": 420,
       "cursorDriftMs": 0,
       "ttsDeliveriesAtSuspend": 4,
       "ttsDeliveriesAfterHold": 4,
@@ -74,9 +102,9 @@
     {
       "id": "X6-same-session-continues-from-the-same-cursor",
       "outcome": "PASS",
-      "deviceCursorAtSuspendMs": 421,
-      "deviceCursorAfterResumeMs": 836,
-      "advancedSinceSuspendMs": 415,
+      "deviceCursorAtSuspendMs": 420,
+      "deviceCursorAfterResumeMs": 839,
+      "advancedSinceSuspendMs": 419,
       "suspendedTimeCreditedToPlayback": false,
       "restartedFromZero": false,
       "duplicateChunksDelivered": 0,
@@ -93,7 +121,7 @@
     {
       "id": "X8-lower-participant-ending-while-preempted",
       "outcome": "PASS",
-      "readSessionId": "read-1788345802333-2kqacu",
+      "readSessionId": "read-1788346051734-ae3jpb",
       "stateWhenPreempted": "paused",
       "stateAfterStopWhilePreempted": "idle",
       "dictateEndOutcome": "NoActiveLease",
@@ -111,14 +139,14 @@
     {
       "id": "X10-process-census",
       "outcome": "PASS",
-      "browserProxyPid": 67368,
+      "browserProxyPid": 96328,
       "browserProxyExitedOnStdinEof": true,
       "voiceMediaBridgeBefore": [],
       "voiceMediaBridgeAfter": [
-        99288
+        89480
       ],
       "newVoiceMediaBridgeProcesses": [
-        99288
+        89480
       ],
       "readBridgeCompanionsBefore": [],
       "readBridgeCompanionsAfter": [],
@@ -128,7 +156,7 @@
       "id": "X11-arbiter-exits-on-its-own-when-idle",
       "outcome": "PASS",
       "arbiterPids": [
-        99288
+        89480
       ],
       "stillRunningAfterIdleGrace": [],
       "note": "No service, no scheduled task, no autostart: nothing stays resident once no participant needs audio focus."
