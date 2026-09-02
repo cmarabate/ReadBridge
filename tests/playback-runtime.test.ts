@@ -7,6 +7,7 @@ import { ReaderController } from '../src/core/reader-controller';
 import { AudioFormat } from '../src/core/tts/provider-interface';
 import { WindowsUiAutomationAdapter } from '../src/adapters/native-uia-adapter';
 import { FakeStreamingTtsProvider } from './helpers/fake-tts';
+import { PacedTtsProvider, PacedTtsStreamSession } from './helpers/paced-tts';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -224,6 +225,72 @@ describeCompanion('Real audio playback session (Windows waveOut, via the compani
     await controller.stop();
     expect(controller.getSnapshot().state).toBe('idle');
     expect(controller.playbackSessionId).toBeNull();
+  }, 60000);
+
+  test('a real pause quiesces the TTS producer as well as the device, and both resume together', async () => {
+    // 300 chunks x 300ms is 90s of audio - well past the 32s playback queue cap - so an
+    // unquiesced producer would fill the device queue during the pause below.
+    const sink = new CompanionAudioPlaybackSink(client);
+    const tts = new PacedTtsProvider({
+      chunkCount: 300,
+      chunkMs: 300,
+      format: FORMAT,
+      initialGrants: 4,
+    });
+    const controller = new ReaderController(tts, sink);
+
+    await controller.startRead(new WindowsUiAutomationAdapter());
+    expect(controller.getSnapshot().state).toBe('playing');
+    expect(controller.getSnapshot().ttsOutputState).toBe('running');
+
+    const stream = tts.sessions[0] as PacedTtsStreamSession;
+    const playbackSessionId = controller.playbackSessionId!;
+
+    await sleep(300);
+    const playing = await client.call('audioStatus', { sessionId: playbackSessionId });
+    expect(playing.positionMs).toBeGreaterThan(100);
+
+    // --- pause: the transaction quiesces upstream first, then the device ---
+    await controller.pause();
+    expect(controller.getSnapshot().state).toBe('paused');
+    expect(controller.getSnapshot().ttsOutputState).toBe('suspended');
+
+    const deliveredAtPause = stream.deliveredCount;
+    const chunksAtPause = [...stream.deliveredChunkIndices];
+    const paused = await client.call('audioStatus', { sessionId: playbackSessionId });
+    expect(paused.state).toBe('paused');
+
+    // Authorise the producer to emit all 90s of remaining audio, then hold the pause.
+    stream.grantProduction(600);
+    await sleep(1000);
+
+    // Neither the device cursor nor the producer moved, and nothing was ever refused.
+    const held = await client.call('audioStatus', { sessionId: playbackSessionId });
+    expect(held.state).toBe('paused');
+    expect(held.positionMs).toBe(paused.positionMs);
+    expect(stream.deliveredCount).toBe(deliveredAtPause);
+    expect(stream.deliveredChunkIndices).toEqual(chunksAtPause);
+    expect(controller.getSnapshot().state).toBe('paused');
+
+    // --- resume: same session, cursor continues, production continues at the next item ---
+    stream.resetProduction();
+    await controller.resume();
+    stream.grantProduction(8);
+    expect(controller.getSnapshot().state).toBe('playing');
+    expect(controller.getSnapshot().ttsOutputState).toBe('running');
+    expect(controller.playbackSessionId).toBe(playbackSessionId);
+
+    await sleep(400);
+    const resumed = await client.call('audioStatus', { sessionId: playbackSessionId });
+    expect(resumed.positionMs).toBeGreaterThan(paused.positionMs);
+    expect(resumed.positionMs).toBeLessThan(paused.positionMs + 1000);
+    expect(stream.deliveredCount).toBeGreaterThan(deliveredAtPause);
+    expect(stream.deliveredChunkIndices.slice(0, chunksAtPause.length)).toEqual(chunksAtPause);
+    expect(new Set(stream.deliveredChunkIndices).size).toBe(stream.deliveredChunkIndices.length);
+
+    await controller.stop();
+    expect(controller.getSnapshot().state).toBe('idle');
+    expect(stream.outputFlowState).toBe('terminal');
   }, 60000);
 
   test('ReaderController reaches idle when the real device drains, not when TTS input ends', async () => {

@@ -8,7 +8,7 @@
     {
       "id": "P1-output-device-present",
       "outcome": "PASS",
-      "companionPid": 72476,
+      "companionPid": 79588,
       "ping": "pong",
       "hasOutputDevice": true,
       "outputDeviceCount": 11
@@ -25,24 +25,24 @@
       "id": "P3-cursor-advances-while-playing",
       "outcome": "PASS",
       "positionAtStartMs": 0,
-      "positionAfter300msMs": 295,
-      "positionAfter600msMs": 597
+      "positionAfter300msMs": 299,
+      "positionAfter600msMs": 600
     },
     {
       "id": "P4-pause-freezes-device-cursor",
       "outcome": "PASS",
-      "positionAtPauseMs": 611,
+      "positionAtPauseMs": 621,
       "wallClockHeldPausedMs": 900,
-      "positionAfterHoldMs": 611,
+      "positionAfterHoldMs": 621,
       "cursorDriftMs": 0
     },
     {
       "id": "P5-resume-continues-same-session-not-restart",
       "outcome": "PASS",
-      "positionAtResumeMs": 611,
-      "positionAfterObserveMs": 894,
+      "positionAtResumeMs": 621,
+      "positionAfterObserveMs": 908,
       "observationWindowMs": 300,
-      "advancedSincePauseMs": 283,
+      "advancedSincePauseMs": 287,
       "restartedFromZero": false,
       "pausedTimeCreditedToPlayback": false
     },
@@ -81,7 +81,7 @@
       "id": "P8-stop-is-terminal",
       "outcome": "PASS",
       "stopState": "stopped",
-      "positionAtStopMs": 911,
+      "positionAtStopMs": 921,
       "resumeAfterStop": {
         "ok": false,
         "reason": "staleSession"

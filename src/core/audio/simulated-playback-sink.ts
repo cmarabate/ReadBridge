@@ -237,7 +237,8 @@ export class SimulatedAudioPlaybackSession implements IAudioPlaybackSession {
     return Math.round(this.playedBeforeMs);
   }
 
-  private queuedBytes(): number {
+  /** Audio accepted but not yet rendered. Public so tests can assert the queue does not grow. */
+  public queuedBytes(): number {
     const undrainedMs = Math.max(0, this.acceptedMs - this.currentPositionMs());
     return Math.round((undrainedMs / 1000) * this.bytesPerSec);
   }

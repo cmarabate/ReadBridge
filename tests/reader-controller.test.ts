@@ -309,8 +309,11 @@ describe('ReaderController', () => {
     const liveSessionId = controller.sessionId;
     expect(sink.sessions).toHaveLength(2);
 
-    // Every stale signal at once: playback completion, an audio chunk, and a word alignment.
-    clock.advance(6000);
+    // A's playback session is terminal, so it can never announce a completion again; its stream
+    // still can, and those signals are the ones that must not reach B. The clock advance is well
+    // short of B's own 5000ms of audio, so anything that ends B here came from A.
+    expect(staleSession.state).toBe('stopped');
+    clock.advance(1500);
     await staleSession.getStatus();
     staleTts.emitChunk({
       audioData: new Uint8Array(bytesForMs(500)),

@@ -1,9 +1,12 @@
+import { TtsOutputGate } from '../../src/core/tts/output-gate';
 import {
   AudioFormat,
   ITtsProvider,
   ITtsStreamSession,
   TtsAudioChunk,
+  TtsFlowControlResult,
   TtsOptions,
+  TtsOutputFlowState,
   TtsWordAlignment,
 } from '../../src/core/tts/provider-interface';
 
@@ -79,6 +82,7 @@ export class FakeTtsStreamSession implements ITtsStreamSession {
   public cancelled = false;
 
   private readonly options: Required<FakeTtsOptions>;
+  private readonly outputGate = new TtsOutputGate();
   private audioListeners: Array<(chunk: TtsAudioChunk) => void> = [];
   private alignmentListeners: Array<(alignment: TtsWordAlignment) => void> = [];
 
@@ -95,42 +99,62 @@ export class FakeTtsStreamSession implements ITtsStreamSession {
     for (const word of text.split(/\s+/).filter(Boolean)) {
       const charStart = text.indexOf(word, cursor);
       cursor = charStart + word.length;
-      this.emitAlignment({
+      const alignment: TtsWordAlignment = {
         word,
         charStart,
         charLength: word.length,
         audioStartMs: audioTime,
         audioEndMs: audioTime + 200,
-      });
+      };
       audioTime += 200;
+      if (!(await this.outputGate.deliver(() => this.emitAlignment(alignment)))) return;
     }
 
     if (!this.options.emitNoAudio) {
-      this.emitChunk({
-        audioData: pcmForMs(this.options.audioMs, this.options.format),
-        format: this.options.format,
-        durationMs: this.options.audioMs,
-        isFinal: false,
-      });
+      await this.outputGate.deliver(() =>
+        this.emitChunk({
+          audioData: pcmForMs(this.options.audioMs, this.options.format),
+          format: this.options.format,
+          durationMs: this.options.audioMs,
+          isFinal: false,
+        })
+      );
     }
   }
 
   public async completeInput(): Promise<void> {
     if (this.cancelled) return;
-    this.emitChunk({
-      audioData: new Uint8Array(0),
-      format: this.options.format,
-      durationMs: 0,
-      isFinal: true,
-    });
+    await this.outputGate.deliver(() =>
+      this.emitChunk({
+        audioData: new Uint8Array(0),
+        format: this.options.format,
+        durationMs: 0,
+        isFinal: true,
+      })
+    );
   }
 
-  /** Emits an alignment outside the normal flow - used to inject stale events. */
+  public get outputFlowState(): TtsOutputFlowState {
+    return this.outputGate.flowState;
+  }
+
+  public suspendOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.suspend();
+  }
+
+  public resumeOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.resume();
+  }
+
+  /**
+   * Emits an alignment outside the normal flow, DELIBERATELY BYPASSING the output gate - it is how
+   * tests inject the stale events a rogue or abandoned stream would produce.
+   */
   public emitAlignment(alignment: TtsWordAlignment): void {
     for (const listener of [...this.alignmentListeners]) listener(alignment);
   }
 
-  /** Emits an audio chunk outside the normal flow - used to inject stale events. */
+  /** Emits an audio chunk outside the normal flow, deliberately bypassing the output gate. */
   public emitChunk(chunk: TtsAudioChunk): void {
     for (const listener of [...this.audioListeners]) listener(chunk);
   }
@@ -151,6 +175,7 @@ export class FakeTtsStreamSession implements ITtsStreamSession {
 
   public async cancel(): Promise<void> {
     this.cancelled = true;
+    this.outputGate.terminate();
   }
 }
 

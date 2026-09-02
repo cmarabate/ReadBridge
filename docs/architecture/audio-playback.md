@@ -1,9 +1,11 @@
-# Audio Playback Session Architecture (RB-AF0)
+# Audio Playback Session Architecture (RB-AF0, RB-AF1)
 
 > **Status.** The playback session described here is **implemented and proven against a real
 > Windows audio device**. The decisive runtime record is
-> [`docs/evidence/playback-runtime.json`](../evidence/playback-runtime.json), reproducible with
-> `yarn evidence:playback`. §6 states plainly what this slice does **not** establish.
+> [`docs/evidence/playback-runtime.json`](../evidence/playback-runtime.json) and
+> [`docs/evidence/tts-flow-control-runtime.json`](../evidence/tts-flow-control-runtime.json),
+> reproducible with `yarn evidence:playback` and `yarn evidence:flow-control`. §6 states plainly
+> what these slices do **not** establish.
 
 ## 1. Synthesis is not playback
 
@@ -14,9 +16,13 @@ TTS provider authority ends at producing audio:
 * provide timing/alignment;
 * cancel generation.
 
-`ITtsProvider` and `ITtsStreamSession` are unchanged by this slice. They have no pause, no resume,
-and no cursor, and they must not acquire any: a provider's `isFinal` means **its input is
-finished**, never that audio was heard.
+A provider's `isFinal` means **its input is finished**, never that audio was heard.
+
+`ITtsStreamSession` gained exactly one thing in RB-AF1: **output flow control**
+(`suspendOutput` / `resumeOutput` / `outputFlowState`). That is the ability to stop and restart
+the DELIVERY of its own stream — not device control. It still has no pause of the audio device,
+no playback cursor, no knowledge of audio focus and no knowledge of any arbitration protocol,
+and it must not acquire any of those.
 
 Playback authority is a separate seam, `IAudioPlaybackSink` / `IAudioPlaybackSession`
 ([`src/core/audio/playback-interface.ts`](../../src/core/audio/playback-interface.ts)). The
@@ -93,20 +99,30 @@ alongside the existing user32 interop and following the same `partial class` con
   `waveOutReset` → `waveOutUnprepareHeader` → `waveOutClose` is idempotent, so the device handle is
   released exactly once.
 * **No hidden automatic restart** exists anywhere in the path.
+* **A paused session is not being fed.** Since RB-AF1 the controller quiesces upstream output
+  before pausing the device, so `queuedBytes` stops growing for the whole duration of a pause.
 
-## 4. Paused buffering policy (bounded, deterministic, tested)
+## 4. Paused buffering: upstream quiesces, and the queue bound is defence in depth
 
-Audio that upstream has **already generated** keeps being accepted while paused, into a queue
-bounded at **32 seconds** of audio at the session's format
-(`WaveOutPlaybackSession.DefaultMaxQueuedSeconds`).
+Two mechanisms, in that order.
 
-A write that would exceed the bound is **refused** — `accepted: false, reason: "queueFull"` — and is
-neither dropped nor truncated. `ReaderController` surfaces a refusal as a playback failure rather
-than pretending the audio played.
+**Primary (RB-AF1): upstream output stops.** `ReaderController.pause()` suspends the TTS stream's
+output and waits for it to go quiescent *before* it pauses the device, so a paused read stops
+receiving audio and alignments altogether. Pause duration is therefore independent of any queue
+size: a five-second pause and a five-minute pause are the same. The contract lives on
+`ITtsStreamSession` and is described in [`tts-providers.md`](tts-providers.md) §0.
 
-No provider-specific flow control was invented for this slice. **Accepted debt:** upstream flow
-control (suspending synthesis while output is paused) belongs to a later slice; until then a pause
-long enough to fill the bound ends the read with an honest error instead of silently losing speech.
+**Defence in depth (RB-AF0, unchanged): the 32-second queue cap.** The playback session still
+bounds undrained audio at **32 seconds** at the session's format
+(`WaveOutPlaybackSession.DefaultMaxQueuedSeconds`). A write that would exceed it is **refused** —
+`accepted: false, reason: "queueFull"` — never dropped and never truncated, and
+`ReaderController` surfaces the refusal as a playback failure rather than pretending the audio
+played.
+
+The cap was deliberately **not** raised. It is what still protects the device queue and process
+memory if a provider implements flow control incorrectly, or produces faster than real time while
+playing. Case `F7` in `docs/evidence/tts-flow-control-runtime.json` is the control that shows it
+firing exactly as before when upstream is left running.
 
 ## 5. `ReaderController` semantics
 
@@ -114,13 +130,14 @@ long enough to fill the bound ends the read with an honest error instead of sile
 | :--- | :--- |
 | `startRead` | Ends any in-flight read first, then acquires text and creates the TTS stream. Stays in `preparing` until the playback session **accepts audio**; only then `playing`. A provider that produced no audio at all raises an error rather than leaving the reader in limbo. |
 | audio chunk | Routed to the current playback session through an ordered pump. `isFinal` calls `completeInput()` on the playback session — it does **not** end the read. |
-| `pause` | Requires `playing`, locates the exact current playback session, calls `pause()`, **confirms the output reported `paused`**, and only then transitions. A refused pause throws and leaves the reader in `playing`. |
-| `resume` | Requires `paused`, uses the **same** playback session, confirms `playing`, then transitions. No new TTS session, no re-acquired document, no reset offset, no reset session id. |
+| `pause` | A two-layer transaction: suspend upstream TTS output and await quiescence, then pause the exact current playback session, **confirm the output reported `paused`**, and only then transition. Either layer failing rolls the other back — see [`reader-controller.md`](reader-controller.md) §6. |
+| `resume` | The mirror: resume upstream output first, then the **same** playback session, confirm `playing`, then transition. No new TTS session, no re-acquired document, no reset offset, no reset session id. |
 | `stop` | Drops read ownership before any `await`, cancels the TTS stream, stops and disposes the playback session, then `stopping` → `idle`. |
 | natural completion | The **output draining** ends the read: the session reports `completed`, and the controller reaches `idle` exactly once. |
 
-The snapshot gained `playbackSessionId`, `playbackState`, `lastObservedPlaybackPositionMs` and
-`producesAudibleOutput`, so no consumer can mistake a modelled session for an audible one.
+The snapshot gained `playbackSessionId`, `playbackState`, `lastObservedPlaybackPositionMs`,
+`producesAudibleOutput` and `ttsOutputState`, so no consumer can mistake a modelled session for an
+audible one, or a paused read for one still being fed.
 `lastObservedPlaybackPositionMs` is a mirror updated when the controller talks to the output, not a
 live probe.
 
@@ -169,5 +186,9 @@ built companion, exactly as the lifecycle tests do.
 * seeking, or any `seeking`-state behaviour;
 * device-change / default-endpoint-switch handling (unplugging the output mid-read is untested);
 * multi-format or non-PCM audio — only PCM matching the session's opening format is accepted;
-* upstream flow control while paused (see §4);
-* any production UI.
+* any production UI;
+* rate limiting a provider that produces faster than real time *while playing* — the 32-second
+  cap is still what bounds that, and a compliant provider is expected to be rate-bound;
+* that any real cloud provider's transport can honour the flow-control contract. Only in-repo
+  providers and the evidence harness's provider have been shown to; the contract deliberately says
+  nothing about how a WebSocket should implement it.

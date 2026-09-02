@@ -1,0 +1,90 @@
+{
+  "harness": "scripts/run_flow_control_runtime_checks.js",
+  "platform": "win32 x64",
+  "node": "v22.16.0",
+  "pathUnderTest": "third-party TTS provider -> ReaderController -> CompanionAudioPlaybackSink -> companion IPC -> WinMM waveOut",
+  "audioBackend": "WinMM waveOut (companion), WAVE_MAPPER, PCM 24000Hz/1ch/16bit",
+  "testSignal": "220 Hz sine at approximately -46 dBFS",
+  "streamShape": "300 chunks x 300ms = 90s of audio",
+  "playbackQueueCapSeconds": 32,
+  "cases": [
+    {
+      "id": "F1-output-device-present",
+      "outcome": "PASS",
+      "hasOutputDevice": true,
+      "outputDeviceCount": 11,
+      "distUnderTest": "dist\\src\\index.js"
+    },
+    {
+      "id": "F2-read-starts-with-running-output-flow",
+      "outcome": "PASS",
+      "readState": "playing",
+      "ttsOutputState": "running",
+      "producesAudibleOutput": true,
+      "playbackSessionId": "read-1788341399781-xe5ux7",
+      "providerId": "evidence-paced-tts"
+    },
+    {
+      "id": "F3-device-cursor-advances-while-playing",
+      "outcome": "PASS",
+      "positionAfter300msMs": 288,
+      "deliveredOutputItems": 4
+    },
+    {
+      "id": "F4-paused-read-quiesces-producer-and-device",
+      "outcome": "PASS",
+      "ttsOutputStateAtPause": "suspended",
+      "audioAuthorisedButUndeliveredMs": 89400,
+      "playbackQueueCapMs": 32000,
+      "wallClockHeldPausedMs": 1500,
+      "positionAtPauseMs": 300,
+      "positionAfterHoldMs": 300,
+      "cursorDriftMs": 0,
+      "deliveredItemsAtPause": 4,
+      "deliveredItemsAfterHold": 4,
+      "highlightWordAtPause": "w1",
+      "highlightWordAfterHold": "w1",
+      "queueRefusals": []
+    },
+    {
+      "id": "F5-resume-restores-producer-and-same-device-session",
+      "outcome": "PASS",
+      "ttsOutputStateAfterResume": "running",
+      "playbackSessionUnchanged": true,
+      "positionAfterResumeMs": 685,
+      "advancedSincePauseMs": 385,
+      "pausedTimeCreditedToPlayback": false,
+      "deliveredItemsAfterResume": 15,
+      "duplicateChunksDelivered": 0,
+      "queueRefusals": []
+    },
+    {
+      "id": "F6-stop-while-suspended-releases-everything",
+      "outcome": "PASS",
+      "readStateAfterStop": "idle",
+      "ttsOutputStateAfterStop": "terminal",
+      "stopCompletedWithinMs": 17,
+      "deliveriesAfterStop": 0
+    },
+    {
+      "id": "F7-control-device-only-pause-still-overflows-the-queue",
+      "outcome": "PASS (RB-AF0 overflow reproduced as expected)",
+      "note": "Upstream left running while only the device paused - the failure RB-AF1 removes.",
+      "queueRefusals": [
+        "queueFull",
+        "queueFull",
+        "queueFull"
+      ],
+      "refusalCount": 194,
+      "queuedBytesAtOverflow": 1526400,
+      "playbackQueueCapBytes": 1536000,
+      "deliveredChunks": 300
+    },
+    {
+      "id": "F8-companion-still-serving-after-all-cases",
+      "outcome": "PASS",
+      "finalPing": "pong"
+    }
+  ],
+  "failureCount": 0
+}

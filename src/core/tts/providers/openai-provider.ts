@@ -1,8 +1,11 @@
+import { TtsOutputGate } from '../output-gate.js';
 import {
   ITtsProvider,
   ITtsStreamSession,
   TtsAudioChunk,
+  TtsFlowControlResult,
   TtsOptions,
+  TtsOutputFlowState,
   TtsWordAlignment,
 } from '../provider-interface.js';
 
@@ -49,6 +52,7 @@ class OpenAiStreamSession implements ITtsStreamSession {
   private apiKey: string;
   private audioListeners: Array<(chunk: TtsAudioChunk) => void> = [];
   private isCancelled: boolean = false;
+  private readonly outputGate = new TtsOutputGate();
 
   constructor(options: TtsOptions, apiKey: string) {
     this.sessionId = `openai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -61,26 +65,42 @@ class OpenAiStreamSession implements ITtsStreamSession {
 
     // OpenAI streams raw audio chunk without word timestamp metadata
     const dummyAudio = new Uint8Array(2048);
-    for (const listener of this.audioListeners) {
-      listener({
-        audioData: dummyAudio,
-        format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
-        durationMs: 1200,
-        isFinal: false,
-      });
-    }
+    await this.outputGate.deliver(() => {
+      for (const listener of this.audioListeners) {
+        listener({
+          audioData: dummyAudio,
+          format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
+          durationMs: 1200,
+          isFinal: false,
+        });
+      }
+    });
   }
 
   public async completeInput(): Promise<void> {
     if (this.isCancelled) return;
-    for (const listener of this.audioListeners) {
-      listener({
-        audioData: new Uint8Array(0),
-        format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
-        durationMs: 0,
-        isFinal: true,
-      });
-    }
+    await this.outputGate.deliver(() => {
+      for (const listener of this.audioListeners) {
+        listener({
+          audioData: new Uint8Array(0),
+          format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
+          durationMs: 0,
+          isFinal: true,
+        });
+      }
+    });
+  }
+
+  public get outputFlowState(): TtsOutputFlowState {
+    return this.outputGate.flowState;
+  }
+
+  public suspendOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.suspend();
+  }
+
+  public resumeOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.resume();
   }
 
   public onAudioChunk(listener: (chunk: TtsAudioChunk) => void): () => void {
@@ -97,6 +117,7 @@ class OpenAiStreamSession implements ITtsStreamSession {
 
   public async cancel(): Promise<void> {
     this.isCancelled = true;
+    this.outputGate.terminate();
     this.audioListeners = [];
   }
 }

@@ -11,6 +11,60 @@
 > transcribed from vendor documentation without a citation or retrieval date and **not** observed
 > traffic. Re-verify against live vendor docs before implementing.
 
+## 0. Output flow control (IMPLEMENTED, provider-neutral)
+
+> Unlike the rest of this document, this section describes **shipped, tested behaviour**, not a
+> specification. Runtime record:
+> [`../evidence/tts-flow-control-runtime.json`](../evidence/tts-flow-control-runtime.json).
+
+`ITtsStreamSession` requires every provider to be able to stop and restart the delivery of its own
+stream output:
+
+```typescript
+readonly outputFlowState: 'running' | 'suspended' | 'terminal';
+suspendOutput(): Promise<TtsFlowControlResult>;
+resumeOutput(): Promise<TtsFlowControlResult>;
+```
+
+This exists because `ReaderController.pause()` pauses a real audio device. A provider that keeps
+producing into a paused device fills a bounded playback queue and eventually has its audio refused,
+which ends a perfectly valid read. Suspending the provider makes pause duration independent of that
+queue: a five-second pause and a five-minute pause are the same.
+
+**Required semantics.**
+
+* **Quiescence is the contract.** Once `suspendOutput()` *resolves*, no further audio chunk and no
+  further word alignment may be delivered for that session until `resumeOutput()`. One
+  already-started delivery may complete before it resolves; none may complete after.
+* **Audio and alignments are gated together.** Alignments that kept flowing during a pause would
+  advance the highlight past speech nobody is hearing. There is deliberately no second, independent
+  alignment pause state.
+* **Resume continues, it does not restart.** Delivery resumes at the next unconsumed item of the
+  same session — no duplicate, no skip, no restart from the top of the document, and the same
+  `sessionId` throughout.
+* **Flow control is not cancellation.** The session, its input and its position all survive.
+* **Idempotent and named.** Outcomes are `suspended` / `alreadySuspended` / `resumed` /
+  `alreadyRunning` / `terminal` / `failed`. `terminal` reports `ok: true` — a finished or cancelled
+  session has nothing left to gate — while `failed` is the only `ok: false`.
+* **`cancel()` must wake every waiter.** A producer blocked on a suspended gate, or a
+  `suspendOutput()` awaiting quiescence, must never survive its session's cancellation.
+* **A new session always starts `running`.** Flow state is scoped to one stream session and can
+  never be inherited by its replacement.
+
+**Implementation.** [`src/core/tts/output-gate.ts`](../../src/core/tts/output-gate.ts) provides
+`TtsOutputGate`, which all three shipped simulators use: a producer hands each emission to
+`deliver()`, which blocks *before* emitting while suspended. Using it is optional — the evidence
+harness in `scripts/run_flow_control_runtime_checks.js` implements the contract from scratch in
+plain JavaScript, which is how provider-neutrality is demonstrated rather than asserted.
+
+**For the live cloud clients in §4**, the contract says nothing about transport. Each provider must
+choose an appropriate mechanism — pausing socket reads, buffering internally behind the gate, or a
+protocol-level flow-control message — and must satisfy the quiescence and exact-continuation rules
+above. **No cloud provider's ability to do this has been demonstrated**; only the in-repo providers
+and the evidence harness's provider have been.
+
+---
+
 ## 1. Provider Comparison Matrix (from vendor documentation — uncited)
 
 | Feature / Dimension | Cartesia Sonic-3.5 | ElevenLabs (Flash v2.5 / Turbo v2.5) | OpenAI Audio Speech (`tts-1`) |
@@ -88,8 +142,9 @@
 
 In Slice 2:
 1. Implement live `CartesiaWebSocketClient` streaming PCM into the existing `IAudioPlaybackSink`
-   seam. (The Web Audio worklet named in this plan does not apply: ReadBridge has no browser host,
-   and audio output lives in the Windows companion — see
-   [`audio-playback.md`](audio-playback.md) §2.)
-2. Implement live `ElevenLabsWebSocketClient` with single-use ephemeral token auth.
+   seam, satisfying the §0 flow-control contract over its WebSocket. (The Web Audio worklet named in
+   this plan does not apply: ReadBridge has no browser host, and audio output lives in the Windows
+   companion — see [`audio-playback.md`](audio-playback.md) §2.)
+2. Implement live `ElevenLabsWebSocketClient` with single-use ephemeral token auth, likewise
+   satisfying §0.
 3. Measure live empirical round-trip latencies, buffer continuity, and audio/highlight synchronization under network jitter.

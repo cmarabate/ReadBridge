@@ -1,8 +1,11 @@
+import { TtsOutputGate } from '../output-gate.js';
 import {
   ITtsProvider,
   ITtsStreamSession,
   TtsAudioChunk,
+  TtsFlowControlResult,
   TtsOptions,
+  TtsOutputFlowState,
   TtsWordAlignment,
 } from '../provider-interface.js';
 
@@ -54,6 +57,7 @@ class CartesiaStreamSession implements ITtsStreamSession {
   private audioListeners: Array<(chunk: TtsAudioChunk) => void> = [];
   private alignmentListeners: Array<(alignment: TtsWordAlignment) => void> = [];
   private isCancelled: boolean = false;
+  private readonly outputGate = new TtsOutputGate();
 
   constructor(options: TtsOptions, apiKey: string, baseUrl: string) {
     this.sessionId = `cartesia-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -87,33 +91,54 @@ class CartesiaStreamSession implements ITtsStreamSession {
       };
 
       currentAudioTime += duration;
-      for (const listener of this.alignmentListeners) {
-        listener(alignment);
-      }
+      // Every emission passes the output gate, so a suspended read stops receiving alignments
+      // before it stops receiving audio - never after.
+      const admitted = await this.outputGate.deliver(() => {
+        for (const listener of this.alignmentListeners) {
+          listener(alignment);
+        }
+      });
+      if (!admitted) return;
     }
 
     // Emit synthesized PCM audio chunk representation
     const dummyAudio = new Uint8Array(1024);
-    for (const listener of this.audioListeners) {
-      listener({
-        audioData: dummyAudio,
-        format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
-        durationMs: currentAudioTime,
-        isFinal: false,
-      });
-    }
+    await this.outputGate.deliver(() => {
+      for (const listener of this.audioListeners) {
+        listener({
+          audioData: dummyAudio,
+          format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
+          durationMs: currentAudioTime,
+          isFinal: false,
+        });
+      }
+    });
   }
 
   public async completeInput(): Promise<void> {
     if (this.isCancelled) return;
-    for (const listener of this.audioListeners) {
-      listener({
-        audioData: new Uint8Array(0),
-        format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
-        durationMs: 0,
-        isFinal: true,
-      });
-    }
+    await this.outputGate.deliver(() => {
+      for (const listener of this.audioListeners) {
+        listener({
+          audioData: new Uint8Array(0),
+          format: { sampleRate: 24000, channels: 1, bitDepth: 16 },
+          durationMs: 0,
+          isFinal: true,
+        });
+      }
+    });
+  }
+
+  public get outputFlowState(): TtsOutputFlowState {
+    return this.outputGate.flowState;
+  }
+
+  public suspendOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.suspend();
+  }
+
+  public resumeOutput(): Promise<TtsFlowControlResult> {
+    return this.outputGate.resume();
   }
 
   public onAudioChunk(listener: (chunk: TtsAudioChunk) => void): () => void {
@@ -132,6 +157,9 @@ class CartesiaStreamSession implements ITtsStreamSession {
 
   public async cancel(): Promise<void> {
     this.isCancelled = true;
+    // Terminate before clearing listeners: a producer blocked on a suspended gate must be woken,
+    // not stranded.
+    this.outputGate.terminate();
     this.audioListeners = [];
     this.alignmentListeners = [];
   }

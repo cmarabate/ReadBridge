@@ -1,4 +1,5 @@
 import { PlaybackSessionState } from './audio/playback-interface.js';
+import { TtsOutputFlowState } from './tts/provider-interface.js';
 
 export type ReaderLifecycleState =
   | 'idle'
@@ -89,6 +90,11 @@ export interface PlaybackStateSnapshot {
   playbackSessionId: string | null;
   /** Last playback state observed from the audio output. Null before output has opened. */
   playbackState: PlaybackSessionState | null;
+  /**
+   * Whether the current TTS stream is still delivering output. `suspended` means upstream
+   * production is quiesced for a pause; null when there is no active stream.
+   */
+  ttsOutputState: TtsOutputFlowState | null;
   /**
    * Last output cursor observed, in milliseconds of audio rendered. It is a mirror updated when
    * the controller talks to the output, not a live probe.

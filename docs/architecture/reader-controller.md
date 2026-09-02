@@ -59,10 +59,12 @@ handle, companion client, or hook.
 
 * `preparing` → `playing` happens when the playback session accepts audio, never merely because a
   TTS stream object exists.
-* `playing` → `paused` happens only after the output has reported that it paused. A refused pause
-  throws and leaves the state at `playing`, which is the truth.
-* `paused` → `playing` uses the **same** playback session and the same read `sessionId`; no new TTS
-  session is created, the document is not re-acquired, and `canonicalTextOffset` is not reset.
+* `playing` → `paused` happens only after **both** upstream TTS output has gone quiescent and the
+  device has reported that it paused. A refusal at either layer throws, rolls the other layer
+  back, and leaves the state at `playing`, which is the truth.
+* `paused` → `playing` restores upstream output and the **same** playback session, under the same
+  read `sessionId`; no new TTS session is created, the document is not re-acquired, and
+  `canonicalTextOffset` is not reset.
 * `playing` → `idle` on its own happens when the **audio output drains**. A TTS stream's `isFinal`
   means its input ended; it calls `completeInput()` on the playback session and nothing more.
 
@@ -97,6 +99,7 @@ export interface PlaybackStateSnapshot {
   followMode: 'SOURCE_OVERLAY' | 'READER_SURFACE';
   playbackSessionId: string | null;
   playbackState: PlaybackSessionState | null;
+  ttsOutputState: TtsOutputFlowState | null;
   lastObservedPlaybackPositionMs: number;
   producesAudibleOutput: boolean;
   error: string | null;
@@ -106,6 +109,8 @@ export interface PlaybackStateSnapshot {
 `producesAudibleOutput` reports whether the configured sink drives a real device, so a consumer can
 never mistake `SimulatedAudioPlaybackSink` for one that makes sound.
 `lastObservedPlaybackPositionMs` is the last cursor the controller observed, not a live probe.
+`ttsOutputState` reports whether the current stream is still delivering output — `suspended` means a
+pause has quiesced the producer, not merely the device.
 
 No component outside `ReaderController` maintains independent state booleans (`isPlaying`, `isPaused`, `isHighlighting`).
 
@@ -117,9 +122,50 @@ already ended, so `ReaderController` also holds `activeReadSessionId`, cleared t
 ends, and fences every callback on **both** tokens. The playback session id is the same string, so
 playback ownership and read ownership cannot drift apart.
 
-## 5. Audio-focus seam
+## 5. The pause/resume transaction (RB-AF1)
+
+Pausing a read means stopping two things: the audio device, and the provider that feeds it.
+Doing only the first is what let a long pause fill the playback queue and end a valid read.
+
+**Pause** — upstream first, because pausing a device the provider keeps feeding is the failure being
+removed:
+
+1. identify the exact current read, TTS stream and playback session;
+2. `suspendOutput()` on the stream, and await **quiescence** — once it resolves no further audio
+   chunk or alignment can be delivered;
+3. drain the audio pump, which the quiesced gate can no longer extend;
+4. `pause()` the exact playback session and confirm it reported `paused`;
+5. only then transition to `paused`.
+
+**Resume** — upstream first again, because audio that cannot be refilled should not start draining:
+
+1. verify the same read is still paused;
+2. `resumeOutput()` on the same stream;
+3. `resume()` the same playback session and confirm it reported `playing`;
+4. only then transition to `playing`.
+
+**Rollback.** Neither half is left applied on its own:
+
+| Failure | Result |
+| :--- | :--- |
+| upstream suspend fails | the device is never touched; reader stays `playing`; throws |
+| playback pause fails | upstream is resumed back to running; reader stays `playing`; throws |
+| upstream resume fails | the device stays paused; reader stays `paused`; throws |
+| playback resume fails | upstream is re-suspended; reader stays `paused`; throws |
+
+Rollback only undoes what *this* call did: an `alreadySuspended` or `terminal` outcome is not
+rolled back, because this call is not what caused it. Output the provider generates during a
+resume rollback is bounded by the playback queue cap.
+
+**Production runs in the background.** A suspended output gate blocks its producer, so `startRead`
+streams text in a background task and awaits only the truthful start boundary — the playback
+session accepting audio. Awaiting the whole stream would strand the caller behind a pause.
+
+## 6. Audio-focus seam
 
 `suspendForAudioFocusAsync()` / `resumeForAudioFocusAsync()` are a narrow internal entry point for a
-future external audio-focus arbiter. They delegate to the same `pause()` / `resume()` path, add no
-second pause mechanism, and report whether output is genuinely suspended or playing. Nothing is
-connected to them; there is no VoiceMediaBridge code in this repository.
+future external audio-focus arbiter. They delegate to the same `pause()` / `resume()` transaction in
+§5 — including its upstream flow control and its rollback — and add no second pause mechanism. A
+user pause and a focus pause are therefore the same production path, and
+`resumeForAudioFocusAsync()` still refuses to resume a pause it did not cause. Nothing is connected
+to them; there is no VoiceMediaBridge code in this repository.

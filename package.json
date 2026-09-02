@@ -16,6 +16,7 @@
     "verify:lint": "yarn lint",
     "evidence:lifecycle": "node scripts/run_lifecycle_runtime_checks.js --out docs/evidence/companion-lifecycle-runtime.json",
     "evidence:playback": "node scripts/run_playback_runtime_checks.js --out docs/evidence/playback-runtime.json",
+    "evidence:flow-control": "node scripts/run_flow_control_runtime_checks.js --out docs/evidence/tts-flow-control-runtime.json",
     "inspect:live": "dotnet run --project native/ReadBridge.Companion -- inspect",
     "matrix:scan": "dotnet run --project native/ReadBridge.Companion -- matrix-scan",
     "highlight:test": "dotnet run --project native/ReadBridge.Companion -- highlight-test"

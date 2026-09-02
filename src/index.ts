@@ -2,6 +2,7 @@ export * from './core/types.js';
 export * from './core/state-machine.js';
 export * from './core/reader-controller.js';
 export * from './core/tts/provider-interface.js';
+export * from './core/tts/output-gate.js';
 export * from './core/audio/playback-interface.js';
 export * from './core/audio/simulated-playback-sink.js';
 export * from './core/audio/companion-playback-sink.js';

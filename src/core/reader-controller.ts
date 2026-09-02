@@ -4,7 +4,13 @@ import {
   PlaybackSessionState,
 } from './audio/playback-interface.js';
 import { ReaderStateMachine } from './state-machine.js';
-import { ITtsProvider, ITtsStreamSession, TtsAudioChunk, TtsWordAlignment } from './tts/provider-interface.js';
+import {
+  ITtsProvider,
+  ITtsStreamSession,
+  TtsAudioChunk,
+  TtsFlowControlResult,
+  TtsWordAlignment,
+} from './tts/provider-interface.js';
 import {
   PlaybackStateSnapshot,
   ReaderDocument,
@@ -13,6 +19,40 @@ import {
   TextSourceAdapter,
   TextSourceCapabilities,
 } from './types.js';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+  readonly settled: boolean;
+}
+
+/** A promise a producer, a routing failure, or a stop can each be the first to settle. */
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  let settled = false;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = (value: T) => {
+      if (settled) return;
+      settled = true;
+      res(value);
+    };
+    reject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      rej(error);
+    };
+  });
+  return {
+    promise,
+    resolve,
+    reject,
+    get settled() {
+      return settled;
+    },
+  };
+}
 
 export class ReaderController {
   /** States a new `startRead` must first bring to a truthful stop. */
@@ -50,6 +90,16 @@ export class ReaderController {
    */
   private audioPump: Promise<void> = Promise.resolve();
   private playbackFailure: string | null = null;
+
+  /**
+   * The background task streaming text into the TTS session and draining its output. Production
+   * runs in the background because a suspended output gate blocks its producer: awaiting the whole
+   * stream in `startRead` would strand the caller behind a pause.
+   */
+  private activeProduction: Promise<void> | null = null;
+
+  /** Settles when playback genuinely started, or when it became certain it never would. */
+  private startSignal: Deferred<void> | null = null;
 
   /** Set only by `suspendForAudioFocusAsync`, so a focus release cannot undo a user's own pause. */
   private pausedForAudioFocus = false;
@@ -108,6 +158,10 @@ export class ReaderController {
     this.playbackFailure = null;
     this.pausedForAudioFocus = false;
     this.audioPump = Promise.resolve();
+    this.activeProduction = null;
+    // Every read starts with upstream output RUNNING. Flow state is owned by the stream session
+    // this read creates, so a suspended predecessor can never hand its state to a successor.
+    this.startSignal = null;
     this.emitState();
 
     try {
@@ -159,28 +213,58 @@ export class ReaderController {
         this.audioPump = this.audioPump
           .then(() => this.routeAudioChunk(chunk, sessionId))
           .catch((err: any) => {
-            if (this.isCurrentSession(sessionId) && !this.playbackFailure) {
-              this.playbackFailure = err?.message ?? String(err);
+            if (!this.isCurrentSession(sessionId)) return;
+            const message: string = err?.message ?? String(err);
+            if (!this.playbackFailure) {
+              this.playbackFailure = message;
             }
+            // A routing failure must reach a caller still waiting for playback to start; the
+            // producer may be blocked and would otherwise never settle the signal.
+            this.startSignal?.reject(new Error(this.playbackFailure ?? message));
           });
       });
 
-      // 3. Stream the text. The controller stays in `preparing` until the playback session has
-      //    actually accepted audio - it must never claim `playing` because a stream object exists.
-      await ttsSession.sendTextDelta(doc.fullText, true);
-      await ttsSession.completeInput();
-      await this.audioPump;
+      // 3. Stream the text in the background, and wait only for the truthful start boundary: the
+      //    playback session accepting audio. The controller stays in `preparing` until then - it
+      //    must never claim `playing` because a stream object exists.
+      const startSignal = createDeferred<void>();
+      this.startSignal = startSignal;
 
-      if (this.playbackFailure) {
-        throw new Error(this.playbackFailure);
-      }
-      if (!this.activePlaybackSession) {
-        throw new Error(
-          `TTS provider '${this.ttsProvider.providerId}' produced no audio for ` +
-            `${doc.fullText.length} characters; nothing was played.`
-        );
-      }
+      this.activeProduction = (async () => {
+        await ttsSession.sendTextDelta(doc.fullText, true);
+        await ttsSession.completeInput();
+        await this.audioPump;
+      })().then(
+        () => {
+          if (!this.isCurrentSession(sessionId)) return;
+          if (this.playbackFailure) {
+            startSignal.reject(new Error(this.playbackFailure));
+          } else if (!this.activePlaybackSession) {
+            startSignal.reject(
+              new Error(
+                `TTS provider '${this.ttsProvider.providerId}' produced no audio for ` +
+                  `${doc.fullText.length} characters; nothing was played.`
+              )
+            );
+          } else {
+            startSignal.resolve();
+          }
+        },
+        (err: any) => {
+          if (!this.isCurrentSession(sessionId)) return;
+          startSignal.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      );
+
+      await startSignal.promise;
     } catch (err: any) {
+      if (this.activeStreamSession) {
+        // Cancelling wakes a producer that may be blocked on its own output gate.
+        await this.activeStreamSession.cancel();
+        this.activeStreamSession = null;
+      }
+      this.activeProduction = null;
+      this.startSignal = null;
       await this.releasePlayback();
       this.activeReadSessionId = null;
       this.stateMachine.transitionTo('error', sessionId, err.message);
@@ -234,6 +318,7 @@ export class ReaderController {
       if (result.state === 'playing' && this.stateMachine.state === 'preparing') {
         this.stateMachine.transitionTo('playing', sessionId);
         this.emitState();
+        this.startSignal?.resolve();
       }
     }
 
@@ -298,6 +383,8 @@ export class ReaderController {
     this.unsubscribePlaybackCompleted = null;
     this.activePlaybackSession = null;
     this.activeStreamSession = null;
+    this.activeProduction = null;
+    this.startSignal = null;
     void finished?.dispose().catch(() => {
       // The session already drained; a teardown failure has nothing left to protect.
     });
@@ -319,12 +406,34 @@ export class ReaderController {
 
     const sessionId = this.stateMachine.sessionId;
     const playback = this.activePlaybackSession;
+    const stream = this.activeStreamSession;
     if (!playback) {
       throw new Error(
         `Cannot pause read '${sessionId}': it has no playback session, so there is no audio to suspend.`
       );
     }
 
+    // Layer 1: quiesce upstream output FIRST. Pausing the device while the provider keeps
+    // producing is what let a long pause fill the playback queue and end a valid read.
+    let suspend: TtsFlowControlResult | null = null;
+    if (stream) {
+      suspend = await stream.suspendOutput();
+      if (!this.isCurrentSession(sessionId)) return;
+
+      if (!suspend.ok) {
+        throw new Error(
+          `TTS output did not suspend (${suspend.outcome}); playback was left running and ` +
+            `reader state remains '${this.readCurrentState()}'.`
+        );
+      }
+
+      // The gate is quiescent, so this drains what the last admitted delivery routed and cannot
+      // be extended by new output.
+      await this.audioPump;
+      if (!this.isCurrentSession(sessionId)) return;
+    }
+
+    // Layer 2: pause the device itself.
     const result = await playback.pause();
     if (!this.isCurrentSession(sessionId)) return;
 
@@ -332,9 +441,14 @@ export class ReaderController {
     this.lastObservedPlaybackPositionMs = result.positionMs;
 
     if (!result.ok || result.state !== 'paused') {
+      // Roll upstream back to running - only if this call is what suspended it. Leaving the
+      // provider suspended while audio still plays would starve a read that never paused.
+      if (stream && suspend?.outcome === 'suspended') {
+        await stream.resumeOutput();
+      }
       throw new Error(
         `Playback output did not pause (${result.reason ?? result.state}); ` +
-          `reader state remains '${this.stateMachine.state}'.`
+          `TTS output was rolled back to running and reader state remains '${this.readCurrentState()}'.`
       );
     }
 
@@ -351,12 +465,29 @@ export class ReaderController {
 
     const sessionId = this.stateMachine.sessionId;
     const playback = this.activePlaybackSession;
+    const stream = this.activeStreamSession;
     if (!playback) {
       throw new Error(
         `Cannot resume read '${sessionId}': its playback session is gone, so the cursor cannot be restored.`
       );
     }
 
+    // Layer 1: upstream first. If the provider cannot resume, audio should stay physically
+    // paused rather than play out a buffer that will never be refilled.
+    let flow: TtsFlowControlResult | null = null;
+    if (stream) {
+      flow = await stream.resumeOutput();
+      if (!this.isCurrentSession(sessionId)) return;
+
+      if (!flow.ok) {
+        throw new Error(
+          `TTS output did not resume (${flow.outcome}); playback was left paused and ` +
+            `reader state remains '${this.readCurrentState()}'.`
+        );
+      }
+    }
+
+    // Layer 2: the device.
     const result = await playback.resume();
     if (!this.isCurrentSession(sessionId)) return;
 
@@ -364,9 +495,14 @@ export class ReaderController {
     this.lastObservedPlaybackPositionMs = result.positionMs;
 
     if (!result.ok || result.state !== 'playing') {
+      // Roll upstream back to suspended - only if this call is what resumed it. Whatever the
+      // provider produced in the interval is bounded by the playback queue cap.
+      if (stream && flow?.outcome === 'resumed') {
+        await stream.suspendOutput();
+      }
       throw new Error(
         `Playback output did not resume (${result.reason ?? result.state}); ` +
-          `reader state remains '${this.stateMachine.state}'.`
+          `TTS output was rolled back to suspended and reader state remains '${this.readCurrentState()}'.`
       );
     }
 
@@ -382,11 +518,25 @@ export class ReaderController {
       // Ownership is dropped before any await, so a chunk still in flight cannot be routed into a
       // session that is being torn down.
       this.activeReadSessionId = null;
+      this.startSignal?.reject(new Error(`Read '${sessionId}' was stopped before playback started.`));
+      this.startSignal = null;
 
       if (this.activeStreamSession) {
+        // Cancel wakes any producer blocked on a suspended output gate; without that, stopping a
+        // paused read would strand that task forever and its audio could surface later.
         await this.activeStreamSession.cancel();
         this.activeStreamSession = null;
       }
+
+      // Bounded by the cancellation above: the producer has been woken and must exit.
+      const production = this.activeProduction;
+      this.activeProduction = null;
+      if (production) {
+        await production.catch(() => {
+          // A production task that failed on the way out has nothing left to protect.
+        });
+      }
+      await this.audioPump.catch(() => undefined);
 
       await this.releasePlayback();
 
@@ -455,6 +605,7 @@ export class ReaderController {
       followMode: this.followMode,
       playbackSessionId: this.activePlaybackSession?.playbackSessionId ?? null,
       playbackState: this.playbackState,
+      ttsOutputState: this.activeStreamSession?.outputFlowState ?? null,
       lastObservedPlaybackPositionMs: this.lastObservedPlaybackPositionMs,
       producesAudibleOutput: this.playbackSink.producesAudibleOutput,
       error: this.stateMachine.lastError,
