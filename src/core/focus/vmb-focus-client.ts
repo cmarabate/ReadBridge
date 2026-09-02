@@ -45,6 +45,22 @@ export function defaultVmbInstallRoot(): string {
   return path.join(localAppData, 'VoiceMediaBridge', 'NativeHost');
 }
 
+/** The only executable name this client will ever launch. */
+const VMB_HOST_EXECUTABLE = 'VoiceMediaBridge.NativeHost.exe';
+
+/** The shape the arbiter actually publishes. Anything else is not a pipe name. */
+const PIPE_NAME_PATTERN = /^VoiceMediaBridge\.AudioFocus\.v[0-9]+\.[0-9a-f]+$/;
+
+/**
+ * Reads the machine-local discovery descriptor, and VALIDATES what it names.
+ *
+ * The file is user-writable, and this client both launches the executable it names and
+ * builds a pipe path from the name it carries. Type-checking the fields would leave a
+ * hidden-process-launch primitive and a pipe path pointing anywhere in the NPFS
+ * namespace, driven by a file anything running as this user can rewrite. So the
+ * executable must be the expected file inside the expected install root, and the pipe
+ * name must match the shape the arbiter publishes.
+ */
 export function readVmbEndpointDescriptor(installRoot = defaultVmbInstallRoot()): VmbEndpointDescriptor | null {
   try {
     const raw = fs.readFileSync(path.join(installRoot, 'audio-focus-endpoint.json'), 'utf8');
@@ -56,10 +72,25 @@ export function readVmbEndpointDescriptor(installRoot = defaultVmbInstallRoot())
     ) {
       return null;
     }
+
+    if (!PIPE_NAME_PATTERN.test(parsed.pipeName)) {
+      return null;
+    }
+
+    const resolvedRoot = path.resolve(installRoot);
+    const resolvedExe = path.resolve(parsed.executablePath);
+    const withinRoot =
+      resolvedExe.toLowerCase().startsWith(`${resolvedRoot.toLowerCase()}${path.sep}`) &&
+      path.basename(resolvedExe).toLowerCase() === VMB_HOST_EXECUTABLE.toLowerCase();
+
+    if (!withinRoot) {
+      return null;
+    }
+
     return {
       protocolVersion: parsed.protocolVersion,
       pipeName: parsed.pipeName,
-      executablePath: parsed.executablePath,
+      executablePath: resolvedExe,
     };
   } catch {
     return null;
@@ -158,10 +189,31 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
       participantId: readSessionId,
     });
 
+    if (reply === null && this.isConnected) {
+      // The arbiter may have granted this after the deadline passed. Assuming a refusal
+      // would strand that lease: nothing would ever release it, the user's background
+      // media would stay paused and the arbiter would never reach idle. Compensate.
+      await this.send({
+        t: 'focusRelease',
+        class: 'SpokenOutput',
+        adapterId: READBRIDGE_ADAPTER_ID,
+        participantId: readSessionId,
+      });
+
+      return {
+        outcome: 'unavailable',
+        granted: false,
+        detail: 'The audio-focus arbiter did not answer in time; any grant was released.',
+      };
+    }
+
     const outcome = mapGrantOutcome(reply?.outcome);
     const granted = outcome === 'granted' || outcome === 'alreadyHeld';
 
-    if (granted) {
+    // Only while still connected. `handleDisconnect` clears this set and can run between
+    // the await above and here; recording a hold afterwards would report focus held by an
+    // authority that is already gone, and a later resume would skip reacquiring it.
+    if (granted && this.isConnected) {
       this.held.add(readSessionId);
     } else {
       this.held.delete(readSessionId);
@@ -238,19 +290,37 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
       );
     }
 
+    if (!PIPE_NAME_PATTERN.test(endpoint.pipeName)) {
+      throw new VmbUnavailableError(
+        `Refusing to open '${endpoint.pipeName}': it is not a VoiceMediaBridge audio-focus pipe name.`
+      );
+    }
+
     const pipePath = `\\\\.\\pipe\\${endpoint.pipeName}`;
     const deadline = Date.now() + this.options.connectTimeoutMs;
-    let spawned = false;
+    let attempts = 0;
     let lastError = 'the arbiter did not accept a connection';
 
     while (Date.now() < deadline) {
+      attempts++;
       try {
         const socket = await connectPipe(pipePath);
         this.attach(socket);
-        if (await this.handshake()) {
+
+        const handshake = await this.handshake();
+        if (handshake === 'accepted') {
           return;
         }
-        throw new VmbUnavailableError('The audio-focus arbiter refused this client.');
+
+        // Only an explicit refusal is permanent. A socket that closed mid-handshake is an
+        // arbiter shutting down as we arrived - a lifecycle race the retry loop below is
+        // there to absorb, and treating it as a refusal would turn a transient into a
+        // permanent "VoiceMediaBridge unavailable".
+        if (handshake === 'refused') {
+          throw new VmbUnavailableError('The audio-focus arbiter refused this client.');
+        }
+
+        throw new Error('the arbiter closed the connection during the handshake');
       } catch (err: any) {
         if (err instanceof VmbUnavailableError) {
           throw err;
@@ -258,10 +328,11 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
 
         lastError = err?.message ?? String(err);
 
-        // Start the arbiter on demand, once. The arbiter's own single-instance mutex is
-        // what makes a race between two clients safe.
-        if (!spawned && this.options.allowSpawn && fs.existsSync(endpoint.executablePath)) {
-          spawned = true;
+        // Re-attempted, not once-only. An arbiter that is shutting down still holds its
+        // single-instance handle for a moment, so a spawn in that window exits without
+        // listening - and a one-shot spawn would already be spent, leaving nobody serving.
+        // Spaced out so the retry does not become a spawn storm.
+        if (attempts % 4 === 1 && this.options.allowSpawn && fs.existsSync(endpoint.executablePath)) {
           spawnArbiter(endpoint.executablePath);
         }
 
@@ -280,11 +351,13 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
     socket.setEncoding('utf8');
 
     socket.on('data', (chunk: string) => this.consume(chunk));
-    socket.on('error', () => this.handleDisconnect());
-    socket.on('close', () => this.handleDisconnect());
+    // Keyed on THIS socket: a previous connection's late close must not tear down the one
+    // that replaced it.
+    socket.on('error', () => this.handleDisconnect(socket));
+    socket.on('close', () => this.handleDisconnect(socket));
   }
 
-  private async handshake(): Promise<boolean> {
+  private async handshake(): Promise<'accepted' | 'refused' | 'lost'> {
     const reply = await this.send({
       t: 'hello',
       protocolVersion: VMB_FOCUS_PROTOCOL_VERSION,
@@ -292,7 +365,12 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
       clientInstanceId: `readbridge-${process.pid}`,
     });
 
-    return reply?.ok === true;
+    if (reply?.ok === true) {
+      return 'accepted';
+    }
+
+    // A reply that names a reason is a decision; anything else is a lost connection.
+    return reply && typeof reply.reason === 'string' && reply.t === 'helloResult' ? 'refused' : 'lost';
   }
 
   private consume(chunk: string): void {
@@ -400,8 +478,8 @@ export class VoiceMediaBridgeFocusClient implements IReadAudioFocusCoordinator {
     }
   }
 
-  private handleDisconnect(): void {
-    if (!this.socket) {
+  private handleDisconnect(socket?: net.Socket): void {
+    if (!this.socket || (socket !== undefined && socket !== this.socket)) {
       return;
     }
 

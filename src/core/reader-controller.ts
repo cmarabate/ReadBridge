@@ -3,6 +3,7 @@ import {
   IAudioPlaybackSink,
   PlaybackSessionState,
 } from './audio/playback-interface.js';
+import { randomUUID } from 'crypto';
 import {
   FocusCommand,
   FocusCommandOutcome,
@@ -205,7 +206,11 @@ export class ReaderController {
     }
     await this.releasePlayback();
 
-    const sessionId = `read-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Unguessable. The id is also this read's audio-focus participant id, and the arbiter
+    // is reachable by any process running as this user - a timestamp plus a few Math.random
+    // characters would be brute-forceable, and guessing it once would be enough to name
+    // someone else's participant.
+    const sessionId = `read-${randomUUID()}`;
     this.stateMachine.startSession(sessionId);
     this.activeReadSessionId = sessionId;
     this.currentAdapter = adapter;
@@ -612,7 +617,10 @@ export class ReaderController {
     if (this.stateMachine.state !== 'paused') return;
 
     const sessionId = this.stateMachine.sessionId;
-    const hadFocus = this.holdsFocusFor(sessionId);
+
+    // A suspension caused by losing the authority is never resumed on the strength of a
+    // stale belief that focus is still held: the hold has to be reacquired truthfully.
+    const hadFocus = !this.suspendedByFocusLoss && this.holdsFocusFor(sessionId);
 
     if (!hadFocus) {
       const grant = await this.acquireFocus(sessionId);
@@ -733,10 +741,16 @@ export class ReaderController {
       this.userOverrodeFocusSuspension = false;
       this.suspendedByFocusLoss = false;
 
-      this.stateMachine.transitionTo('stopping', sessionId);
       this.activeGeometry = null;
       this.emitHighlight(null);
-      this.emitState();
+
+      // A read that already failed goes straight to idle: `error` cannot reach `stopping`,
+      // and a user stopping a read that fell silent - after losing the audio-focus
+      // authority, say - must not be met with an invalid transition.
+      if (this.readCurrentState() !== 'error') {
+        this.stateMachine.transitionTo('stopping', sessionId);
+        this.emitState();
+      }
 
       this.stateMachine.transitionTo('idle', sessionId);
       this.emitState();
@@ -766,14 +780,25 @@ export class ReaderController {
       return false;
     }
 
-    await this.suspendPlaybackTransaction();
+    // Marked BEFORE the await, not after. A user pause landing while this suspension is
+    // in flight reads this flag to decide whether it is taking an authority-owned pause
+    // over; setting it afterwards would let the user's own pause be relabelled as a
+    // preemption, and a later restoration would then put audio back that the user stopped.
+    this.pausedForAudioFocus = true;
+
+    try {
+      await this.suspendPlaybackTransaction();
+    } catch (err) {
+      this.pausedForAudioFocus = false;
+      throw err;
+    }
 
     // Re-read after the await: the transaction throws when the output refuses, and a
     // completion can land while the suspension is in flight, so the state before the
     // await proves nothing about it now.
     const suspended = this.readCurrentState() === 'paused';
-    if (suspended) {
-      this.pausedForAudioFocus = true;
+    if (!suspended) {
+      this.pausedForAudioFocus = false;
     }
     return suspended;
   }
@@ -824,6 +849,16 @@ export class ReaderController {
     }
 
     const result = await this.focusCoordinator.requestSpokenOutputFocus(sessionId);
+
+    // Re-checked after the await. `startRead`'s failure path releases focus and drops
+    // ownership while a grant may still be in flight; recording it afterwards would leave
+    // the snapshot claiming a hold for a read that already errored, and would let a later
+    // resume skip reacquiring focus it does not have.
+    if (result.granted && !this.isCurrentSession(sessionId)) {
+      await this.focusCoordinator.releaseSpokenOutputFocus(sessionId).catch(() => undefined);
+      return { granted: false, outcome: 'unavailable', detail: 'The read ended while focus was being granted.' };
+    }
+
     if (result.granted) {
       this.focusHeldForSessionId = sessionId;
     }

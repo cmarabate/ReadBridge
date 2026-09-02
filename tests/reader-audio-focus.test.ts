@@ -8,11 +8,15 @@ import {
   SimulatedAudioPlaybackSink,
 } from '../src/core/audio/simulated-playback-sink';
 import { UnarbitratedAudioFocusCoordinator } from '../src/core/focus/audio-focus-contract';
+import { readVmbEndpointDescriptor } from '../src/core/focus/vmb-focus-client';
 import { ReaderController } from '../src/core/reader-controller';
 import { AudioFormat } from '../src/core/tts/provider-interface';
 import { fakeClock } from './helpers/fake-tts';
 import { FakeAudioFocusCoordinator } from './helpers/fake-focus';
 import { PacedTtsProvider, PacedTtsStreamSession, settleAsyncWork } from './helpers/paced-tts';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 interface Harness {
   controller: ReaderController;
@@ -458,6 +462,26 @@ describe('Losing the focus authority fails safe', () => {
     expect(playback.lastObservedPositionMs).toBe(400);
   });
 
+  test('a user resume after an authority loss must reacquire focus, not trust a stale hold', async () => {
+    const h = build({ chunkCount: 200, initialGrants: 4 });
+
+    await h.controller.startRead(new WindowsUiAutomationAdapter());
+    h.clock.advance(400);
+
+    // The authority vanishes; the reader falls silent and its hold is gone.
+    h.focus.dropConnection();
+    await settleAsyncWork(10);
+    expect(h.controller.getSnapshot().state).toBe('error');
+
+    // Even if the coordinator were to claim the hold again, a resume must ask.
+    const requestsBefore = h.focus.requested.length;
+    await h.controller.stop();
+    await h.controller.startRead(new WindowsUiAutomationAdapter());
+
+    expect(h.focus.requested.length).toBeGreaterThan(requestsBefore);
+    expect(h.controller.getSnapshot().holdsAudioFocus).toBe(true);
+  });
+
   test('a connection lost while nothing is playing changes no state', async () => {
     const h = build();
 
@@ -465,5 +489,70 @@ describe('Losing the focus authority fails safe', () => {
     await settleAsyncWork(4);
 
     expect(h.controller.getSnapshot().state).toBe('idle');
+  });
+});
+
+describe('Endpoint discovery refuses what it cannot trust', () => {
+  function withDescriptor(descriptor: unknown): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-endpoint-'));
+    fs.writeFileSync(path.join(root, 'audio-focus-endpoint.json'), JSON.stringify(descriptor));
+    return root;
+  }
+
+  test('a well-formed descriptor naming the installed host is accepted', () => {
+    const root = withDescriptor({ protocolVersion: 1, pipeName: 'VoiceMediaBridge.AudioFocus.v1.abcdef012345', executablePath: '' });
+    const exe = path.join(root, 'VoiceMediaBridge.NativeHost.exe');
+    fs.writeFileSync(path.join(root, 'audio-focus-endpoint.json'), JSON.stringify({
+      protocolVersion: 1,
+      pipeName: 'VoiceMediaBridge.AudioFocus.v1.abcdef012345',
+      executablePath: exe,
+    }));
+
+    const descriptor = readVmbEndpointDescriptor(root);
+    expect(descriptor).not.toBeNull();
+    expect(descriptor!.executablePath).toBe(path.resolve(exe));
+  });
+
+  test('an executable outside the install root is refused', () => {
+    // The descriptor is user-writable and this client LAUNCHES what it names, so a path
+    // pointing anywhere else is a hidden-process-launch primitive.
+    const root = withDescriptor({
+      protocolVersion: 1,
+      pipeName: 'VoiceMediaBridge.AudioFocus.v1.abcdef012345',
+      executablePath: 'C:\Windows\System32\cmd.exe',
+    });
+
+    expect(readVmbEndpointDescriptor(root)).toBeNull();
+  });
+
+  test('a different executable name inside the install root is refused', () => {
+    const root = withDescriptor({ protocolVersion: 1, pipeName: 'VoiceMediaBridge.AudioFocus.v1.abcdef012345', executablePath: '' });
+    fs.writeFileSync(path.join(root, 'audio-focus-endpoint.json'), JSON.stringify({
+      protocolVersion: 1,
+      pipeName: 'VoiceMediaBridge.AudioFocus.v1.abcdef012345',
+      executablePath: path.join(root, 'evil.exe'),
+    }));
+
+    expect(readVmbEndpointDescriptor(root)).toBeNull();
+  });
+
+  test.each([
+    ['..\..\somewhere'],
+    ['VoiceMediaBridge.AudioFocus.v1.abcdef012345\..\other'],
+    ['arbitrary-pipe-name'],
+    ['VoiceMediaBridge.AudioFocus.vX.abcdef012345'],
+  ])('a pipe name of %p is refused', (pipeName) => {
+    const root = withDescriptor({ protocolVersion: 1, pipeName, executablePath: '' });
+    fs.writeFileSync(path.join(root, 'audio-focus-endpoint.json'), JSON.stringify({
+      protocolVersion: 1,
+      pipeName,
+      executablePath: path.join(root, 'VoiceMediaBridge.NativeHost.exe'),
+    }));
+
+    expect(readVmbEndpointDescriptor(root)).toBeNull();
+  });
+
+  test('a missing descriptor is simply absent, not an exception', () => {
+    expect(readVmbEndpointDescriptor(path.join(os.tmpdir(), 'rb-no-such-root'))).toBeNull();
   });
 });
