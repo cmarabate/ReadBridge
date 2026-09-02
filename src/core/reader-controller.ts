@@ -3,6 +3,11 @@ import {
   IAudioPlaybackSink,
   PlaybackSessionState,
 } from './audio/playback-interface.js';
+import {
+  FocusCommand,
+  FocusCommandOutcome,
+  IReadAudioFocusCoordinator,
+} from './focus/audio-focus-contract.js';
 import { ReaderStateMachine } from './state-machine.js';
 import {
   ITtsProvider,
@@ -104,6 +109,27 @@ export class ReaderController {
   /** Set only by `suspendForAudioFocusAsync`, so a focus release cannot undo a user's own pause. */
   private pausedForAudioFocus = false;
 
+  /**
+   * The external audio-focus authority, if this controller is integrated with one.
+   * Null means standalone: nothing arbitrates, and the snapshot says so.
+   */
+  private readonly focusCoordinator: IReadAudioFocusCoordinator | null;
+  private unsubscribeFocusCommands: (() => void) | null = null;
+  private unsubscribeFocusConnectionLost: (() => void) | null = null;
+
+  /** The read this controller currently holds external audio focus for. */
+  private focusHeldForSessionId: string | null = null;
+
+  /**
+   * True once the user has deliberately taken the read out of playing while the focus
+   * authority believed it was merely preempted. A later restoration command must not
+   * put audio back for a pause the user owns.
+   */
+  private userOverrodeFocusSuspension = false;
+
+  /** True while playback is suspended because the focus authority became unreachable. */
+  private suspendedByFocusLoss = false;
+
   private canonicalTextOffset: number = 0;
   private currentSentenceIndex: number = 0;
   private currentWord: string | null = null;
@@ -118,9 +144,43 @@ export class ReaderController {
    * `playing`, so the caller must choose an output explicitly - a real one, or
    * `SimulatedAudioPlaybackSink`, whose `producesAudibleOutput: false` reaches the snapshot.
    */
-  constructor(ttsProvider: ITtsProvider, playbackSink: IAudioPlaybackSink) {
+  /**
+   * @param focusCoordinator Optional external audio-focus authority. Supplying one puts
+   * this controller in INTEGRATED mode: it will not become audible without a grant, and
+   * an unreachable authority is a refusal rather than a licence to play. Omitting one is
+   * an explicit, snapshot-visible choice to run unarbitrated.
+   */
+  constructor(
+    ttsProvider: ITtsProvider,
+    playbackSink: IAudioPlaybackSink,
+    focusCoordinator: IReadAudioFocusCoordinator | null = null
+  ) {
     this.ttsProvider = ttsProvider;
     this.playbackSink = playbackSink;
+    this.focusCoordinator = focusCoordinator?.arbitrates ? focusCoordinator : null;
+
+    if (this.focusCoordinator) {
+      this.unsubscribeFocusCommands = this.focusCoordinator.onCommand((command) =>
+        this.handleFocusCommand(command)
+      );
+      this.unsubscribeFocusConnectionLost = this.focusCoordinator.onConnectionLost(() => {
+        void this.handleFocusAuthorityLost();
+      });
+    }
+  }
+
+  /** Whether an external authority decides when this controller may be audible. */
+  public get isFocusArbitrated(): boolean {
+    return this.focusCoordinator !== null;
+  }
+
+  /** Detaches from the focus authority. The coordinator's own lifetime is the caller's. */
+  public async dispose(): Promise<void> {
+    this.unsubscribeFocusCommands?.();
+    this.unsubscribeFocusCommands = null;
+    this.unsubscribeFocusConnectionLost?.();
+    this.unsubscribeFocusConnectionLost = null;
+    await this.stop();
   }
 
   public get state(): ReaderLifecycleState {
@@ -159,6 +219,8 @@ export class ReaderController {
     this.pausedForAudioFocus = false;
     this.audioPump = Promise.resolve();
     this.activeProduction = null;
+    this.userOverrodeFocusSuspension = false;
+    this.suspendedByFocusLoss = false;
     // Every read starts with upstream output RUNNING. Flow state is owned by the stream session
     // this read creates, so a suspended predecessor can never hand its state to a successor.
     this.startSignal = null;
@@ -266,6 +328,10 @@ export class ReaderController {
       this.activeProduction = null;
       this.startSignal = null;
       await this.releasePlayback();
+
+      // A grant that never became audible must be handed back promptly: the user's
+      // background media is paused on its behalf.
+      await this.releaseFocus(sessionId);
       this.activeReadSessionId = null;
       this.stateMachine.transitionTo('error', sessionId, err.message);
       this.emitState();
@@ -280,18 +346,39 @@ export class ReaderController {
   private async routeAudioChunk(chunk: TtsAudioChunk, sessionId: string): Promise<void> {
     if (!this.isCurrentSession(sessionId)) return;
 
+    // A read that has already failed to route is finished. Continuing would re-request
+    // audio focus for every remaining chunk of a read that is being torn down.
+    if (this.playbackFailure) return;
+
     // An empty chunk carries no audio, so it must not bring a playback session into existence:
     // a session opened by the provider's final empty marker would let a read that produced no
     // audio at all look like one that played.
     if (!this.activePlaybackSession && chunk.audioData.length === 0) return;
 
     if (!this.activePlaybackSession) {
+      // THE PRE-START GATE. Real audio exists and is about to be handed to an output, so
+      // this is the last moment before ReadBridge becomes audible - and therefore the
+      // moment focus must be settled. Asking after opening the device would mean
+      // announcing playback that had already started.
+      const grant = await this.acquireFocus(sessionId);
+      if (!this.isCurrentSession(sessionId)) return;
+
+      if (!grant.granted) {
+        throw new Error(
+          `Audio focus was not granted for read '${sessionId}' (${grant.outcome})` +
+            `${grant.detail ? `: ${grant.detail}` : ''}; nothing was played.`
+        );
+      }
+
       const session = await this.playbackSink.createSession(sessionId, chunk.format);
       if (!this.isCurrentSession(sessionId)) {
         // The read was abandoned while the output was opening.
         await session.dispose();
         return;
       }
+      // From here the grant is backed by a real playback session. If anything below
+      // fails, startRead's catch releases focus rather than leaving the user's
+      // background media paused for a read that never became audible.
       this.activePlaybackSession = session;
       this.unsubscribePlaybackCompleted = session.onCompleted((playbackSessionId, positionMs) => {
         this.handlePlaybackCompleted(playbackSessionId, sessionId, positionMs);
@@ -385,6 +472,13 @@ export class ReaderController {
     this.activeStreamSession = null;
     this.activeProduction = null;
     this.startSignal = null;
+
+    // The read is over, so its focus is over. Only once no participant remains may the
+    // authority causally restore the background media it paused on our behalf.
+    void this.releaseFocus(sessionId).catch(() => {
+      // A release that could not be delivered is handled by the authority's own
+      // disconnect invalidation; there is nothing further to do here.
+    });
     void finished?.dispose().catch(() => {
       // The session already drained; a teardown failure has nothing left to protect.
     });
@@ -398,10 +492,61 @@ export class ReaderController {
   }
 
   /**
-   * Suspends real audio output first, and only reports `paused` if the output actually paused.
-   * A pause that the output refused leaves the reader in `playing`, which is the truth.
+   * A USER pause.
+   *
+   * Runs the same truthful two-layer suspension as a preemption, and then gives audio
+   * focus BACK - because a user who paused is not waiting to be restored, and holding
+   * focus would keep their background media suppressed indefinitely. This is the whole
+   * difference from a preemption, where focus is deliberately retained.
    */
   public async pause(): Promise<void> {
+    // Pausing a read the authority already suspended is the user TAKING THAT PAUSE OVER.
+    // Audio is already silent, so there is nothing to suspend - but the ownership must
+    // change hands, or a later restoration would put audio back that the user stopped.
+    if (
+      this.stateMachine.state === 'paused' &&
+      this.pausedForAudioFocus &&
+      this.activeReadSessionId === this.stateMachine.sessionId
+    ) {
+      const takenOver = this.stateMachine.sessionId;
+      this.userOverrodeFocusSuspension = true;
+      this.pausedForAudioFocus = false;
+      await this.releaseFocus(takenOver);
+      this.emitState();
+      return;
+    }
+
+    if (this.stateMachine.state !== 'playing') return;
+
+    const pausedSessionId = this.stateMachine.sessionId;
+    await this.suspendPlaybackTransaction();
+
+    if (this.readCurrentState() !== 'paused' || !this.isPausedRead(pausedSessionId)) {
+      return;
+    }
+
+    // The user now owns this pause. If the authority had preempted us, it must not put
+    // audio back on a later restoration command.
+    if (this.pausedForAudioFocus) {
+      this.userOverrodeFocusSuspension = true;
+      this.pausedForAudioFocus = false;
+    }
+
+    await this.releaseFocus(pausedSessionId);
+
+    // Only an arbitrated reader has focus state to report; emitting in standalone mode
+    // would be a second identical `paused` snapshot for no change at all.
+    if (this.focusCoordinator) {
+      this.emitState();
+    }
+  }
+
+  /**
+   * The truthful two-layer suspension itself, with no opinion about focus. Both a user
+   * pause and an authority-ordered preemption go through exactly this, so there is only
+   * ever one pause mechanism.
+   */
+  private async suspendPlaybackTransaction(): Promise<void> {
     if (this.stateMachine.state !== 'playing') return;
 
     const sessionId = this.stateMachine.sessionId;
@@ -457,10 +602,52 @@ export class ReaderController {
   }
 
   /**
-   * Resumes THE SAME playback session. No new TTS session, no re-acquired document, no reset
-   * offset, no reset session id - which is the whole point of the contract.
+   * A USER resume.
+   *
+   * Focus is reacquired BEFORE anything becomes audible again, because the pause gave it
+   * back and something else may hold it now. A refusal leaves the read paused; a grant
+   * that is then followed by a failed restoration is handed straight back.
    */
   public async resume(): Promise<void> {
+    if (this.stateMachine.state !== 'paused') return;
+
+    const sessionId = this.stateMachine.sessionId;
+    const hadFocus = this.holdsFocusFor(sessionId);
+
+    if (!hadFocus) {
+      const grant = await this.acquireFocus(sessionId);
+      if (!this.isPausedRead(sessionId)) return;
+
+      if (!grant.granted) {
+        throw new Error(
+          `Cannot resume read '${sessionId}': audio focus was not granted (${grant.outcome})` +
+            `${grant.detail ? `: ${grant.detail}` : ''}; the read remains paused.`
+        );
+      }
+    }
+
+    try {
+      await this.restorePlaybackTransaction();
+    } catch (err) {
+      // A grant this call obtained must not outlive a restoration that failed.
+      if (!hadFocus) {
+        await this.releaseFocus(sessionId);
+      }
+      throw err;
+    }
+
+    if (this.readCurrentState() !== 'playing' && !hadFocus) {
+      await this.releaseFocus(sessionId);
+    }
+
+    this.userOverrodeFocusSuspension = false;
+    this.suspendedByFocusLoss = false;
+  }
+
+  /**
+   * The truthful two-layer restoration itself, with no opinion about focus.
+   */
+  private async restorePlaybackTransaction(): Promise<void> {
     if (this.stateMachine.state !== 'paused') return;
 
     const sessionId = this.stateMachine.sessionId;
@@ -540,6 +727,12 @@ export class ReaderController {
 
       await this.releasePlayback();
 
+      // Releasing the exact participant is what lets the authority skip a dead
+      // predecessor later, instead of trying to restore a read that no longer exists.
+      await this.releaseFocus(sessionId);
+      this.userOverrodeFocusSuspension = false;
+      this.suspendedByFocusLoss = false;
+
       this.stateMachine.transitionTo('stopping', sessionId);
       this.activeGeometry = null;
       this.emitHighlight(null);
@@ -556,7 +749,15 @@ export class ReaderController {
   // nothing about any wire format, lease, or priority, and it adds no second pause mechanism: it
   // delegates to the same truthful pause()/resume() path everything else uses.
 
-  /** @returns whether audio output is genuinely suspended now. */
+  /**
+   * Suspends because the authority preempted this read.
+   *
+   * Focus is deliberately NOT released: the authority already owns the transition from
+   * Active to Preempted, and a release here would turn a preemption into an ending -
+   * the read would never be restored and the background media would come back early.
+   *
+   * @returns whether audio output is genuinely suspended now.
+   */
   public async suspendForAudioFocusAsync(): Promise<boolean> {
     if (this.stateMachine.state === 'paused') {
       return true;
@@ -565,9 +766,11 @@ export class ReaderController {
       return false;
     }
 
-    await this.pause();
-    // Re-read after the await: pause() throws when the output refuses, and a completion can land
-    // while the pause is in flight, so the state before the await proves nothing about it now.
+    await this.suspendPlaybackTransaction();
+
+    // Re-read after the await: the transaction throws when the output refuses, and a
+    // completion can land while the suspension is in flight, so the state before the
+    // await proves nothing about it now.
     const suspended = this.readCurrentState() === 'paused';
     if (suspended) {
       this.pausedForAudioFocus = true;
@@ -576,8 +779,13 @@ export class ReaderController {
   }
 
   /**
-   * @returns whether audio output is genuinely playing again. Refuses to resume a pause it did not
-   * cause, so releasing audio focus cannot override a pause the user asked for.
+   * Restores after the authority released whatever preempted this read.
+   *
+   * No new focus request is made: the authority restored this participant logically, so
+   * asking again would be asking for something already held. Refuses to resume a pause it
+   * did not cause, so a restoration cannot override a pause the user asked for.
+   *
+   * @returns whether audio output is genuinely playing again.
    */
   public async resumeForAudioFocusAsync(): Promise<boolean> {
     if (this.stateMachine.state === 'playing') {
@@ -587,8 +795,115 @@ export class ReaderController {
       return false;
     }
 
-    await this.resume();
-    return this.readCurrentState() === 'playing';
+    await this.restorePlaybackTransaction();
+    const playing = this.readCurrentState() === 'playing';
+    if (playing) {
+      this.pausedForAudioFocus = false;
+    }
+    return playing;
+  }
+
+  // ---- Focus authority plumbing -----------------------------------------------------
+
+  private holdsFocusFor(sessionId: string): boolean {
+    return this.focusCoordinator?.holdsFocus(sessionId) ?? this.focusHeldForSessionId === sessionId;
+  }
+
+  private isPausedRead(sessionId: string): boolean {
+    return this.stateMachine.sessionId === sessionId && this.readCurrentState() === 'paused';
+  }
+
+  private async acquireFocus(sessionId: string): Promise<{
+    granted: boolean;
+    outcome: string;
+    detail?: string;
+  }> {
+    if (!this.focusCoordinator) {
+      // Standalone mode, chosen explicitly at construction and visible on the snapshot.
+      return { granted: true, outcome: 'unarbitrated' };
+    }
+
+    const result = await this.focusCoordinator.requestSpokenOutputFocus(sessionId);
+    if (result.granted) {
+      this.focusHeldForSessionId = sessionId;
+    }
+    return result;
+  }
+
+  private async releaseFocus(sessionId: string): Promise<void> {
+    if (this.focusHeldForSessionId === sessionId) {
+      this.focusHeldForSessionId = null;
+    }
+
+    if (!this.focusCoordinator) {
+      return;
+    }
+
+    try {
+      await this.focusCoordinator.releaseSpokenOutputFocus(sessionId);
+    } catch {
+      // A release the authority never heard is covered by its disconnect invalidation.
+    }
+  }
+
+  /**
+   * Carries out one SUSPEND/RESUME from the authority, for an EXACT read.
+   *
+   * Everything that is not the live read fails closed. There is no fallback to the
+   * current or newest read: a command for a read that has ended is unavailable, and a
+   * restoration of a pause the user took over is refused so the authority can invalidate
+   * that phantom participant rather than putting audio back.
+   */
+  private async handleFocusCommand(command: FocusCommand): Promise<FocusCommandOutcome> {
+    if (command.readSessionId !== this.activeReadSessionId) {
+      return 'participantUnavailable';
+    }
+
+    try {
+      if (command.action === 'suspend') {
+        return (await this.suspendForAudioFocusAsync()) ? 'applied' : 'rejected';
+      }
+
+      if (this.userOverrodeFocusSuspension || this.suspendedByFocusLoss) {
+        return 'rejected';
+      }
+
+      return (await this.resumeForAudioFocusAsync()) ? 'applied' : 'rejected';
+    } catch {
+      return 'failed';
+    }
+  }
+
+  /**
+   * The authority became unreachable while this read may be audible.
+   *
+   * Falling silent is the only safe answer: continuing would mean speaking over whatever
+   * the arbiter would have protected. It does not resume by itself when the connection
+   * comes back - focus has to be truthfully reacquired first, which a user resume does.
+   */
+  private async handleFocusAuthorityLost(): Promise<void> {
+    this.focusHeldForSessionId = null;
+
+    if (this.readCurrentState() !== 'playing') {
+      return;
+    }
+
+    this.suspendedByFocusLoss = true;
+    try {
+      await this.suspendPlaybackTransaction();
+    } catch {
+      // Reported through the snapshot; there is no safer action available here.
+    }
+
+    if (this.readCurrentState() === 'paused') {
+      this.pausedForAudioFocus = false;
+      this.stateMachine.transitionTo(
+        'error',
+        this.stateMachine.sessionId,
+        'The audio-focus authority became unreachable; playback was suspended.'
+      );
+      this.emitState();
+    }
   }
 
   public getSnapshot(): PlaybackStateSnapshot {
@@ -608,6 +923,10 @@ export class ReaderController {
       ttsOutputState: this.activeStreamSession?.outputFlowState ?? null,
       lastObservedPlaybackPositionMs: this.lastObservedPlaybackPositionMs,
       producesAudibleOutput: this.playbackSink.producesAudibleOutput,
+      focusArbitrated: this.focusCoordinator !== null,
+      holdsAudioFocus: this.focusHeldForSessionId !== null &&
+        this.focusHeldForSessionId === this.stateMachine.sessionId,
+      pausedByAudioFocus: this.pausedForAudioFocus,
       error: this.stateMachine.lastError,
     };
   }

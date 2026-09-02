@@ -6,6 +6,8 @@ export * from './core/tts/output-gate.js';
 export * from './core/audio/playback-interface.js';
 export * from './core/audio/simulated-playback-sink.js';
 export * from './core/audio/companion-playback-sink.js';
+export * from './core/focus/audio-focus-contract.js';
+export * from './core/focus/vmb-focus-client.js';
 export * from './core/tts/providers/cartesia-provider.js';
 export * from './core/tts/providers/elevenlabs-provider.js';
 export * from './core/tts/providers/openai-provider.js';

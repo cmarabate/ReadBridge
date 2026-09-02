@@ -106,5 +106,11 @@ export interface PlaybackStateSnapshot {
    * other.
    */
   producesAudibleOutput: boolean;
+  /** Whether an external audio-focus authority decides when this reader may be audible. */
+  focusArbitrated: boolean;
+  /** Whether this exact read currently holds external audio focus. */
+  holdsAudioFocus: boolean;
+  /** Whether the current pause was ordered by the focus authority rather than the user. */
+  pausedByAudioFocus: boolean;
   error: string | null;
 }
