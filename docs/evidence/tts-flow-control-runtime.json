@@ -21,13 +21,13 @@
       "readState": "playing",
       "ttsOutputState": "running",
       "producesAudibleOutput": true,
-      "playbackSessionId": "read-1788341399781-xe5ux7",
+      "playbackSessionId": "read-1788345572089-h65j6t",
       "providerId": "evidence-paced-tts"
     },
     {
       "id": "F3-device-cursor-advances-while-playing",
       "outcome": "PASS",
-      "positionAfter300msMs": 288,
+      "positionAfter300msMs": 291,
       "deliveredOutputItems": 4
     },
     {
@@ -37,8 +37,8 @@
       "audioAuthorisedButUndeliveredMs": 89400,
       "playbackQueueCapMs": 32000,
       "wallClockHeldPausedMs": 1500,
-      "positionAtPauseMs": 300,
-      "positionAfterHoldMs": 300,
+      "positionAtPauseMs": 311,
+      "positionAfterHoldMs": 311,
       "cursorDriftMs": 0,
       "deliveredItemsAtPause": 4,
       "deliveredItemsAfterHold": 4,
@@ -51,8 +51,8 @@
       "outcome": "PASS",
       "ttsOutputStateAfterResume": "running",
       "playbackSessionUnchanged": true,
-      "positionAfterResumeMs": 685,
-      "advancedSincePauseMs": 385,
+      "positionAfterResumeMs": 699,
+      "advancedSincePauseMs": 388,
       "pausedTimeCreditedToPlayback": false,
       "deliveredItemsAfterResume": 15,
       "duplicateChunksDelivered": 0,
@@ -63,7 +63,7 @@
       "outcome": "PASS",
       "readStateAfterStop": "idle",
       "ttsOutputStateAfterStop": "terminal",
-      "stopCompletedWithinMs": 17,
+      "stopCompletedWithinMs": 10,
       "deliveriesAfterStop": 0
     },
     {
@@ -71,11 +71,9 @@
       "outcome": "PASS (RB-AF0 overflow reproduced as expected)",
       "note": "Upstream left running while only the device paused - the failure RB-AF1 removes.",
       "queueRefusals": [
-        "queueFull",
-        "queueFull",
         "queueFull"
       ],
-      "refusalCount": 194,
+      "refusalCount": 1,
       "queuedBytesAtOverflow": 1526400,
       "playbackQueueCapBytes": 1536000,
       "deliveredChunks": 300

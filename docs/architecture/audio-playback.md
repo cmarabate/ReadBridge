@@ -156,7 +156,10 @@ mechanism, and return whether output is *genuinely* suspended or playing. They k
 any wire format, lease or priority. `resumeForAudioFocusAsync()` refuses to resume a pause it did
 not cause, so releasing focus cannot override a pause the user asked for.
 
-**Nothing is wired to VoiceMediaBridge. This slice contains no VMB code of any kind.**
+**Superseded by RB-AF2.** These are now connected to VoiceMediaBridge through the narrow
+focus client in [`audio-focus-integration.md`](audio-focus-integration.md). The seam itself
+is unchanged: it still knows nothing about wire formats, leases or priorities, and it is
+still the only pause mechanism.
 
 ## 6. What this slice proves, and what it does not
 
@@ -174,7 +177,25 @@ not cause, so releasing focus cannot override a pause the user asked for.
 * a replacement session takes sole ownership of the device (`P10`);
 * the companion still serves IPC afterwards, shuts down cleanly, and leaves no orphan (`P11`, `P12`).
 
-`tests/playback-runtime.test.ts` re-proves the same behaviour through the production TypeScript
+**ALSO PROVEN (RB-AF1 — `docs/evidence/tts-flow-control-runtime.json`; real device, production
+path, driven by a third-party provider written from scratch against the published interface):**
+
+* a paused read quiesces its PRODUCER as well as its device: **89.4 seconds of audio authorised
+  but undelivered against a 32-second queue cap, 0 ms cursor drift, deliveries frozen, the
+  highlight word frozen, and zero queue refusals** (`F4`);
+* resume restores both, on the same playback session, continuing with no duplicate chunk and no
+  paused time credited to playback (`F5`);
+* stopping a paused read releases the stream, its blocked producer and the device (`F6`);
+* the CONTROL — pausing only the device, as RB-AF0 did — still fills the queue to 1,526,400 of
+  1,536,000 bytes before the output refuses audio (`F7`). That is the failure RB-AF1 removes.
+
+**ALSO PROVEN (RB-AF2 — `docs/evidence/audio-focus-runtime.json`; real browser-proxy process, real
+shared audio-focus arbiter, real companion, real device):** ReadBridge acquires focus before it is
+ever audible, a Dictate participant in another process preempts the exact read, the device cursor
+freezes with 0 ms drift, and the restoration continues the same read, TTS stream and playback
+session. Details in [`audio-focus-integration.md`](audio-focus-integration.md) §7.
+
+`tests/playback-runtime.test.ts` re-proves this behaviour through the production TypeScript
 path (`ReaderController` → `CompanionAudioPlaybackSink` → IPC → `waveOut`) and skips without the
 built companion, exactly as the lifecycle tests do.
 
@@ -182,7 +203,8 @@ built companion, exactly as the lifecycle tests do.
 
 * live cloud TTS — Cartesia, ElevenLabs and OpenAI remain **simulators**, no network call is made,
   and no credential handling exists;
-* any VoiceMediaBridge integration;
+* the full physical background-media sequence with real GSMTC media (see
+  [`audio-focus-integration.md`](audio-focus-integration.md) §7);
 * seeking, or any `seeking`-state behaviour;
 * device-change / default-endpoint-switch handling (unplugging the output mid-read is untested);
 * multi-format or non-PCM audio — only PCM matching the session's opening format is accepted;

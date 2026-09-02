@@ -1,0 +1,138 @@
+{
+  "harness": "scripts/run_audio_focus_runtime_checks.js",
+  "platform": "win32 x64",
+  "node": "v22.16.0",
+  "topology": "browser-proxy process -> named pipe -> VMB arbiter process -> named pipe -> ReadBridge -> companion -> WinMM waveOut",
+  "audioBackend": "WinMM waveOut (ReadBridge.Companion), PCM 24000Hz/1ch/16bit",
+  "testSignal": "220 Hz sine at approximately -46 dBFS",
+  "dictateRequester": {
+    "class": "VOICE_CAPTURE",
+    "adapterId": "chatgpt-dictate",
+    "tabId": 4242,
+    "instanceId": "evidence-instance"
+  },
+  "cases": [
+    {
+      "id": "X1-readbridge-discovers-installed-voicemediabridge",
+      "outcome": "PASS",
+      "installRoot": "C:\\Users\\cmarabate\\AppData\\Local\\VoiceMediaBridge\\NativeHost",
+      "protocolVersion": 1,
+      "pipeName": "VoiceMediaBridge.AudioFocus.v1.ff094c48c9ad",
+      "executablePath": "C:\\Users\\cmarabate\\AppData\\Local\\VoiceMediaBridge\\NativeHost\\VoiceMediaBridge.NativeHost.exe",
+      "dependsOnDevCheckout": false
+    },
+    {
+      "id": "X2-readbridge-holds-focus-and-is-audible",
+      "outcome": "PASS",
+      "readSessionId": "read-1788345578720-0f0fo2",
+      "playbackSessionId": "read-1788345578720-0f0fo2",
+      "focusArbitrated": true,
+      "holdsAudioFocus": true,
+      "producesAudibleOutput": true,
+      "deviceCursorAfter400msMs": 390,
+      "arbiterPipe": "VoiceMediaBridge.AudioFocus.v1.ff094c48c9ad"
+    },
+    {
+      "id": "X3-dictate-preempts-readbridge-through-one-arbiter",
+      "outcome": "PASS",
+      "voiceStartedOutcome": "NoPlayingSession",
+      "deviceCursorBeforePreemptionMs": 390,
+      "deviceCursorWhenSuspensionLandedMs": 451,
+      "crossProcessPreemptionCostMs": 61,
+      "voiceStartedReason": null,
+      "backgroundMediaOutcome": "NoPlayingSession",
+      "readerStateAfterPreemption": "paused",
+      "pausedByAudioFocus": true,
+      "focusStillHeldByReadBridge": true,
+      "note": "A preemption is not an ending: ReadBridge keeps its logical focus while suspended."
+    },
+    {
+      "id": "X4-suspension-freezes-real-device-cursor-and-producer",
+      "outcome": "PASS",
+      "wallClockHeldSuspendedMs": 1500,
+      "audioAuthorisedButUndeliveredMs": 59400,
+      "deviceCursorAtSuspendMs": 451,
+      "deviceCursorAfterHoldMs": 451,
+      "cursorDriftMs": 0,
+      "ttsDeliveriesAtSuspend": 4,
+      "ttsDeliveriesAfterHold": 4,
+      "ttsOutputState": "suspended",
+      "highlightWordAtSuspend": "w1",
+      "highlightWordAfterHold": "w1",
+      "playbackSessionUnchanged": true
+    },
+    {
+      "id": "X5-dictate-release-restores-the-exact-readbridge-read",
+      "outcome": "PASS",
+      "voiceEndedOutcome": "Released",
+      "voiceEndedReason": "SpokenOutputRestored",
+      "readSessionUnchanged": true,
+      "playbackSessionUnchanged": true,
+      "ttsStreamCount": 1,
+      "ttsOutputState": "running"
+    },
+    {
+      "id": "X6-same-session-continues-from-the-same-cursor",
+      "outcome": "PASS",
+      "deviceCursorAtSuspendMs": 451,
+      "deviceCursorAfterResumeMs": 868,
+      "advancedSinceSuspendMs": 417,
+      "suspendedTimeCreditedToPlayback": false,
+      "restartedFromZero": false,
+      "duplicateChunksDelivered": 0,
+      "chunksBeforeSuspend": 2,
+      "chunksAfterResume": 200
+    },
+    {
+      "id": "X7-readbridge-end-clears-the-focus-episode",
+      "outcome": "PASS",
+      "readerState": "idle",
+      "holdsAudioFocus": false,
+      "ttsOutputState": "terminal"
+    },
+    {
+      "id": "X8-lower-participant-ending-while-preempted",
+      "outcome": "PASS",
+      "readSessionId": "read-1788345581555-nser03",
+      "stateWhenPreempted": "paused",
+      "stateAfterStopWhilePreempted": "idle",
+      "dictateEndOutcome": "NoActiveLease",
+      "dictateEndReason": null,
+      "readerNotResurrectedByDictateEnd": true
+    },
+    {
+      "id": "X9-browser-boundary-behaviour-unchanged",
+      "outcome": "PASS",
+      "mediaContextOutcome": "Found",
+      "mediaContextSource": "Brave",
+      "anonymousLifecycleOutcome": "RequesterRequired",
+      "anonymousLifecycleReason": "MissingRequester"
+    },
+    {
+      "id": "X10-process-census",
+      "outcome": "PASS",
+      "browserProxyPid": 68104,
+      "browserProxyExitedOnStdinEof": true,
+      "voiceMediaBridgeBefore": [],
+      "voiceMediaBridgeAfter": [
+        90384
+      ],
+      "newVoiceMediaBridgeProcesses": [
+        90384
+      ],
+      "readBridgeCompanionsBefore": [],
+      "readBridgeCompanionsAfter": [],
+      "note": "Exactly one new VoiceMediaBridge process may remain: the on-demand arbiter, whose own idle exit is X11."
+    },
+    {
+      "id": "X11-arbiter-exits-on-its-own-when-idle",
+      "outcome": "PASS",
+      "arbiterPids": [
+        90384
+      ],
+      "stillRunningAfterIdleGrace": [],
+      "note": "No service, no scheduled task, no autostart: nothing stays resident once no participant needs audio focus."
+    }
+  ],
+  "failureCount": 0
+}

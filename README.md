@@ -3,15 +3,19 @@
 Universal Windows AI Read Aloud with synchronized text highlighting across applications.
 
 > **Slice status.** This repository contains the **Windows UI Automation feasibility slice** plus
-> the **resumable audio playback session** (RB-AF0) with **TTS output flow control** (RB-AF1). The native companion inspects UIA text
+> the **resumable audio playback session** (RB-AF0), **TTS output flow control** (RB-AF1), and
+> **VoiceMediaBridge audio-focus integration** (RB-AF2). The native companion inspects UIA text
 > providers, renders a click-through highlight overlay, and now drives a real Windows audio device
 > whose playback can genuinely pause, stay suspended, and resume the *same* session from the *same*
-> position — and a pause now quiesces the TTS producer too, so pause duration is unbounded. There
-> is still **no live text-to-speech** — the TTS providers are in-memory simulators,
+> position — and a pause now quiesces the TTS producer too, so pause duration is unbounded.
+> ReadBridge is also the first real `SPOKEN_OUTPUT` participant in VoiceMediaBridge: it
+> acquires audio focus before it is ever audible, and ChatGPT Dictate preempts and restores
+> the exact read across process boundaries. There is still **no live text-to-speech** — the TTS providers are in-memory simulators,
 > no network call is made, and no credential handling exists — and there is no browser extension
 > and no UI. Read [`docs/feasibility/windows-uia.md`](docs/feasibility/windows-uia.md) §2 and
-> [`docs/architecture/audio-playback.md`](docs/architecture/audio-playback.md) §6, which separate
-> what is proven from what is expected, before drawing conclusions from anything here.
+> [`docs/architecture/audio-playback.md`](docs/architecture/audio-playback.md) §6 and
+> [`docs/architecture/audio-focus-integration.md`](docs/architecture/audio-focus-integration.md) §7,
+> which separate what is proven from what is expected, before drawing conclusions from anything here.
 >
 > “Pause duration is unbounded” assumes a TTS provider that honours the flow-control contract in
 > [`docs/architecture/tts-providers.md`](docs/architecture/tts-providers.md) §0. The shipped
@@ -50,7 +54,15 @@ yarn highlight:test      # step the overlay across the first words of the focuse
 yarn evidence:lifecycle  # re-record docs/evidence/companion-lifecycle-runtime.json
 yarn evidence:playback      # re-record docs/evidence/playback-runtime.json (plays a quiet test tone)
 yarn evidence:flow-control  # re-record docs/evidence/tts-flow-control-runtime.json (same tone)
+yarn evidence:audio-focus   # re-record docs/evidence/audio-focus-runtime.json (same tone)
 ```
+
+`evidence:audio-focus` additionally needs an **installed** VoiceMediaBridge (run its
+`tools/Install-NativeHost.ps1`). It drives the whole convergence across real processes:
+a real browser-proxy host, the shared audio-focus arbiter, this ReadBridge host, the
+ReadBridge companion and a real output device. It never pauses or resumes your background
+media — whether a background pause happens at all depends on what was already playing, and
+either answer is recorded honestly.
 
 `evidence:flow-control` needs a built `dist/` as well as the companion, because it drives the
 production TypeScript path end to end. Both harnesses open a real audio output device and render a
@@ -77,6 +89,8 @@ applications you already had open — not just ones a script launched.
 * `scripts/run_flow_control_runtime_checks.js` — deterministic TTS output flow-control checks over
   the production path, including a control case that reproduces the playback-queue overflow this
   behaviour removes. Writes the committed evidence artifact.
+* `scripts/run_audio_focus_runtime_checks.js` — cross-process audio-focus checks: real browser-proxy
+  process, real shared arbiter, real companion, real device. Writes the committed evidence artifact.
 * `scripts/run_matrix_tests.ps1` — launches each target application in turn and runs `inspect-proc`
   against it.
 * `scripts/scan_all_apps.ps1` — launches the target applications, then runs a single `matrix-scan`.
@@ -89,5 +103,6 @@ application windows** on your desktop.
 * [`docs/feasibility/windows-uia.md`](docs/feasibility/windows-uia.md) — feasibility verdict and evidence classification
 * [`docs/architecture/reader-controller.md`](docs/architecture/reader-controller.md) — playback state machine and session tokens
 * [`docs/architecture/audio-playback.md`](docs/architecture/audio-playback.md) — the resumable audio playback session, its Windows backend, paused-buffering policy, and its runtime evidence
+* [`docs/architecture/audio-focus-integration.md`](docs/architecture/audio-focus-integration.md) — ReadBridge as a VoiceMediaBridge SPOKEN_OUTPUT participant, and its cross-process evidence
 * [`docs/architecture/tts-providers.md`](docs/architecture/tts-providers.md) — the implemented output flow-control contract (§0), then Slice 2 TTS provider specifications
 * [`docs/evidence/`](docs/evidence) — committed runtime evidence, and analyst-authored expectations clearly labelled as such
